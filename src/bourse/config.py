@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     slack_channel_id: str = ""
     bourse_model_large: str = "qwen3.5:27b-q4_K_M"
     bourse_model_small: str = "gemma4:12b"
+    bourse_admin_token: SecretStr = SecretStr("")
+    # Comma-separated hosts accepted for any vendor's card URLs (dev only, e.g. localhost).
+    bourse_dev_hosts: str = ""
+
+    @property
+    def dev_hosts(self) -> frozenset[str]:
+        return frozenset(h.strip().lower() for h in self.bourse_dev_hosts.split(",") if h.strip())
 
 
 @lru_cache(maxsize=1)

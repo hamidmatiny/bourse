@@ -1,0 +1,37 @@
+{
+  "name": "Vendor A Stats",
+  "description": "Computes column statistics.",
+  "version": "1.0.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://vendor-a.local/a2a/stats-compute",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "provider": {
+    "organization": "Vendor A",
+    "url": "https://vendor-a.local"
+  },
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "stats.compute",
+      "name": "stats.compute",
+      "description": "stats.compute over tabular datasets.",
+      "tags": [
+        "stats",
+        "compute",
+        "dataset"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "Vendor B PII Detector",
+  "description": "Détecte les données personnelles — PII detection.",
+  "version": "1.0.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://vendor-b.local/a2a/pii-detect",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "provider": {
+    "organization": "Vendor B",
+    "url": "https://vendor-b.local"
+  },
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "pii.detect",
+      "name": "pii.detect",
+      "description": "pii.detect over tabular datasets.",
+      "tags": [
+        "pii",
+        "detect",
+        "dataset"
+      ]
+    }
+  ]
+}

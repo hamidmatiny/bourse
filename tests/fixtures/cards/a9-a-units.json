@@ -1,0 +1,37 @@
+{
+  "name": "Vendor A Units",
+  "description": "Normalizes units.",
+  "version": "1.2.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://vendor-a.local/a2a/units-normalize",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "provider": {
+    "organization": "Vendor A",
+    "url": "https://vendor-a.local"
+  },
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "units.normalize",
+      "name": "units.normalize",
+      "description": "units.normalize over tabular datasets.",
+      "tags": [
+        "units",
+        "normalize",
+        "dataset"
+      ]
+    }
+  ]
+}

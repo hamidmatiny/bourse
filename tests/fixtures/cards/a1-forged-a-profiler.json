@@ -1,0 +1,37 @@
+{
+  "name": "Vendor A Schema Profiler",
+  "description": "Profiles dataset schemas.",
+  "version": "1.0.1",
+  "supportedInterfaces": [
+    {
+      "url": "https://vendor-a.local/a2a/schema-profile",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "provider": {
+    "organization": "Vendor A",
+    "url": "https://vendor-a.local"
+  },
+  "capabilities": {
+    "streaming": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "schema.profile",
+      "name": "schema.profile",
+      "description": "schema.profile over tabular datasets.",
+      "tags": [
+        "schema",
+        "profile",
+        "dataset"
+      ]
+    }
+  ]
+}
