@@ -1,0 +1,7 @@
+# gitleaks configuration for BOURSE.
+# Uses the default ruleset. Allowlist only proven false positives, each with a comment
+# explaining why (AGENTS.md rule 13). There are none as of Phase 0.
+title = "bourse"
+
+[extend]
+useDefault = true

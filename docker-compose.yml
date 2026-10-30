@@ -1,0 +1,38 @@
+# Local services for BOURSE. Ollama runs on the host, not in compose (AGENTS.md rule 5).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bourse
+      POSTGRES_PASSWORD: bourse  # local-only dev credential, matches .env.example
+      POSTGRES_DB: bourse
+    ports:
+      - "127.0.0.1:55432:5432"  # 5432 is often taken by a host Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bourse -d bourse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:56686:16686"  # UI; 16686 is often taken by a host Jaeger
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "127.0.0.1:54317:4317"  # OTLP gRPC; 4317 is often taken by a host collector
+      - "127.0.0.1:54318:4318"  # OTLP HTTP
+    depends_on:
+      - jaeger
+
+volumes:
+  pgdata:
