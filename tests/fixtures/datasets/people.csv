@@ -1,0 +1,31 @@
+id,name,email,phone,card,sin,signup_date,active,age
+1,Ravi Cote,ravi.cote0@example.com,(604) 541-6747,4089 4415 4622 2102,142 578 657,2024-01-03,false,49
+2,Priya Chen,priya.chen1@example.ca,514-388-3942,5146-8922-0712-4797,232 911 735,2024-01-10,false,50
+3,Sofia Nguyen,sofia.nguyen2@example.org,+1 604 248 2497,3731 165113 69430,314 948 431,2024-01-21,true,35
+4,Wei Silva,wei.silva3@example.com,647.861.1336,6011 0957 7250 0645,456 155 230,2024-01-28,true,23
+5,Mia Gagnon,mia.gagnon4@example.ca,,4446 9245 3744 4122,535 085 427,2024-02-03,true,28
+6,Zoe Roy,zoe.roy5@example.org,416-249-6489,5100-8543-1321-1121,678 367 434,2024-02-11,true,
+7,Mia Kowalski,mia.kowalski6@example.com,+1 604 476 0749,3700 232191 44833,743 079 774,2024-02-18,true,42
+8,Jonas Kowalski,,647.368.7010,6011 9952 6750 1208,930 400 041,2024-02-25,false,35
+9,Sofia Kowalski,sofia.kowalski8@example.org,(905) 925-0793,4245 9977 2674 1495,139 130 249,2024-03-03,true,60
+10,Liam Nguyen,liam.nguyen9@example.com,604-363-9055,5176-7591-1863-2049,256 000 613,2024-03-09,true,37
+11,Sofia Cote,sofia.cote10@example.ca,+1 416 426 3655,3738 543992 38772,305 776 122,2024-03-14,true,29
+12,Sofia Gagnon,sofia.gagnon11@example.org,647.546.5775,,404 573 840,2024-03-20,false,25
+13,Mateo Martin,mateo.martin12@example.com,(416) 820-3964,4722 8831 1458 2974,550 705 388,2024-03-28,true,19
+14,Jonas Gagnon,jonas.gagnon13@example.ca,905-372-6582,5128-8207-0185-1831,,2024-04-07,true,52
+15,Mateo Smith,mateo.smith14@example.org,+1 416 483 2251,3772 529258 53158,750 164 360,2024-04-10,false,54
+16,Jonas Silva,jonas.silva15@example.com,514.343.5942,6011 2685 1684 7073,905 421 347,2024-04-20,true,75
+17,Zoe Nguyen,zoe.nguyen16@example.ca,(416) 317-2295,4102 7863 4227 0116,187 247 523,2024-04-25,false,67
+18,Priya Martin,priya.martin17@example.org,647-549-0747,5124-4611-2429-5481,286 766 852,2024-05-03,true,
+19,Lucas Lee,lucas.lee18@example.com,+1 905 224 4207,3724 732529 21407,345 118 939,2024-05-12,true,44
+20,Lucas Roy,,647.352.6725,6011 0010 8136 6538,492 984 839,2024-05-16,true,56
+21,Lea Bouchard,lea.bouchard20@example.org,(604) 440-1621,4198 1628 5712 6830,596 509 307,2024-05-25,false,64
+22,Ravi Singh,ravi.singh21@example.com,604-861-8896,5118-9543-7077-8140,623 532 769,2024-05-29,false,53
+23,Mia Silva,mia.silva22@example.ca,,3725 388026 56339,724 030 317,2024-06-08,false,65
+24,Ava Martin,ava.martin23@example.org,604.813.6235,6011 9536 8539 6376,946 294 509,2024-06-16,false,62
+25,Olivia Okafor,olivia.okafor24@example.com,(604) 776-9932,4068 5664 6572 6207,144 042 876,2024-06-20,true,31
+26,Ravi Kowalski,ravi.kowalski25@example.ca,604-704-7349,4111 1111 1111 1111,262 667 181,2024-06-27,false,63
+27,Wei Gagnon,wei.gagnon26@example.org,+1 604 472 3484,4111 1111 1111 1112,357 748 201,2024-07-04,true,26
+28,Sofia Smith,sofia.smith27@example.com,647.962.8679,6011 6438 4365 8791,443 327 336,2024-07-11,false,68
+29,Mateo Tremblay,mateo.tremblay28@example.ca,(604) 772-6178,4293 3664 9379 5515,046 454 286,2024-07-17,false,24
+30,Lea Silva,lea.silva29@example.org,604-757-8719,5130-2510-3972-2553,642 211 890,2024-07-27,true,25

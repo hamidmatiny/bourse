@@ -4,9 +4,10 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from bourse.config import get_settings
-from bourse.registry.repo_sql import metadata
+from bourse.meter.repo_sql import metadata as meter_metadata
+from bourse.registry.repo_sql import metadata as registry_metadata
 
-target_metadata = metadata
+target_metadata = [registry_metadata, meter_metadata]
 
 
 def _url() -> str:

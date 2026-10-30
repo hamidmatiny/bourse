@@ -1,0 +1,21 @@
+order_id,customer,amount,ordered_on,contact,notes,paid,vol_L
+5000,Wei Kowalski,793.99,2025-06-01,wei@shop.example.com,leave at door,false,14.15
+5001,Noah Tremblay,354.59,2025-06-02,905-660-0164,fragile,true,17.56
+5002,Mia Kowalski,206.51,2025-06-03,mia@shop.example.com,,true,14.19
+5003,Mia Roy,533.62,2025-06-04,905.279.8261,call before delivery,false,10.54
+5004,Lucas Martin,894.68,2025-06-05,lucas@shop.example.com,gift wrap,true,19.16
+5005,Emma Roy,441.42,2025-06-06,604-856-8668,n/a,true,9.14
+5006,Jonas Kowalski,95.36,2025-06-07,jonas@shop.example.com,leave at door,false,19.95
+5007,Liam Haddad,452.93,2025-06-08,905.893.0124,fragile,true,16.73
+5008,Hana Chen,216.91,2025-06-09,hana@shop.example.com,,true,7.14
+5009,Olivia Bouchard,545.73,2025-06-10,647-644-0960,call before delivery,false,4.18
+5010,Noah Chen,450.51,2025-06-11,noah@shop.example.com,gift wrap,true,2.21
+5011,Emma Cote,725.27,2025-06-12,416.338.4083,n/a,true,17.02
+5012,Mia Haddad,403.18,2025-06-13,mia@shop.example.com,leave at door,false,2.86
+5013,Ravi Gagnon,411.58,2025-06-14,604-346-8536,fragile,true,2.65
+5014,Ethan Cote,272.23,2025-06-15,ethan@shop.example.com,,true,13.42
+5015,Olivia Cote,815.49,2025-06-16,905.954.2149,call before delivery,false,8.45
+5016,Sofia Haddad,354.91,2025-06-17,sofia@shop.example.com,gift wrap,true,7.31
+5017,Noah Chen,782.68,2025-06-18,514-811-0258,n/a,true,2.20
+5018,Lucas Kowalski,871.76,2025-06-19,lucas@shop.example.com,leave at door,false,9.23
+5019,Ravi Silva,191.71,2025-06-20,416.502.4305,fragile,true,16.67

@@ -39,3 +39,31 @@ class BudgetSpec(BaseModel):
     @property
     def paid_enabled(self) -> bool:
         return self.allow_paid and self.usd_cap > 0
+
+
+class ToolCallRecord(BaseModel):
+    """One MCP tool call made through the adapter (persisted in Phase 4)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool: str
+    wall_ms: float = Field(ge=0)
+    ok: bool
+    error_kind: str | None = None
+
+
+class LlmUsageRecord(BaseModel):
+    """One request through the metering proxy. Token counts come from the upstream response."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str
+    task_id: str | None
+    provider: str | None
+    model: str
+    tokens_in: int = Field(ge=0)
+    tokens_out: int = Field(ge=0)
+    wall_ms: float = Field(ge=0)
+    status: int
+    error_kind: str | None
+    at: datetime

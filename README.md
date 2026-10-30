@@ -5,15 +5,17 @@ pass a deterministic admission exam, and are selected by a LangGraph broker to r
 a dataset-intake job (closed taxonomy of 5 skills), with every LLM call metered, every trust
 decision made by deterministic checks, and every benchmark metric reported as n/N on a frozen split.
 
-**Status: Phase 1** — Phase 0 (contracts, runtime limits, LLM layer, probe, approval
-interface, CI) plus Agent Card signing (RFC 8785 JCS + RFC 7515 detached JWS, ES256/EdDSA,
-pinned vendor JWKS only) and a registry (FastAPI + Postgres) with immutable card revisions,
-semver rollback/reuse checks, a rejection taxonomy, and the trust state machine. No broker or
-agents yet. Rules and phase plan: [AGENTS.md](AGENTS.md). Decisions: [docs/adr/](docs/adr/).
+**Status: Phase 2a** — Phases 0–1 (contracts, runtime limits, LLM layer, probe, approval
+interface, signed Agent Cards, registry) plus typed per-skill I/O contracts, three stateless MCP
+tool servers (table/DuckDB, PII, units), an allowlisted MCP→LangChain adapter with per-agent
+tool budgets, and a metering LLM proxy (OpenAI facade over Ollama, upstream-measured usage in
+Postgres). No agents or broker yet. Rules and phase plan: [AGENTS.md](AGENTS.md). Decisions:
+[docs/adr/](docs/adr/).
 
-## Acceptance commands (Phase 1)
+## Acceptance commands (Phase 2a)
 
-Prerequisites: `uv`, Docker, and `gitleaks`; `cp .env.example .env`.
+Prerequisites: `uv`, Docker, `gitleaks`, `cp .env.example .env`. Live tests need host Ollama with
+`OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_NUM_PARALLEL=2`.
 
 ```sh
 uv sync
@@ -23,10 +25,10 @@ uv run pytest                       # unit tests; live and db excluded
 docker compose up -d postgres
 uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
 uv run pytest -m db                 # Postgres integration tests
-uv run bourse attacks phase1        # A1/A1b/A2/A3/A9 + honest controls, n/N
-uv run bourse keys gen --vendor vendor-a.local   # private key -> data/keys/ (gitignored)
+uv run pytest -m live -q -rA        # host Ollama
 gitleaks detect --no-banner --redact
 git status --short
 ```
 
-Phase 0 live checks (host Ollama): `uv run bourse probe`, `uv run pytest -m live -q`.
+Services: `bourse mcp serve {table|pii|units}` (ports 55101–55103), `bourse meter serve`
+(port 55200), `bourse registry serve` (port 8700). All bind 127.0.0.1.

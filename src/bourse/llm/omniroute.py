@@ -11,8 +11,10 @@ from bourse.contracts.metering import Usage
 from bourse.llm.base import (
     ChatMessage,
     ChatResult,
+    FinishReason,
     ToolCall,
     ToolSpec,
+    openai_message,
     parse_arguments,
     tool_payload,
 )
@@ -56,7 +58,7 @@ class OpenAICompatProvider:
     ) -> ChatResult:
         body: dict[str, Any] = {
             "model": self._model,
-            "messages": [m.model_dump() for m in messages],
+            "messages": [openai_message(m) for m in messages],
             "max_tokens": max_tokens,
             "stream": False,
         }
@@ -78,6 +80,7 @@ class OpenAICompatProvider:
             ToolCall(
                 name=str(c.get("function", {}).get("name", "")),
                 arguments=parse_arguments(c.get("function", {}).get("arguments", "{}")),
+                id=c.get("id"),
             )
             for c in (message.get("tool_calls") or [])
         )
@@ -91,11 +94,16 @@ class OpenAICompatProvider:
             model=str(data.get("model") or self._model),
             provider=self.name,
         )
+        raw_finish = choices[0].get("finish_reason")
+        finish: FinishReason = (
+            "tool_calls" if calls else "length" if raw_finish == "length" else "stop"
+        )
         return ChatResult(
             text=str(message.get("content") or ""),
             tool_calls=calls,
             usage=usage,
             usd=self.price(tokens_in, tokens_out),
+            finish_reason=finish,
         )
 
     async def aclose(self) -> None:

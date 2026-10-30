@@ -1,0 +1,1433 @@
+{
+  "csv": "people.csv",
+  "n_rows": 30,
+  "n_cols": 9,
+  "profile": {
+    "columns": [
+      {
+        "name": "id",
+        "dtype": "int",
+        "null_count": 0,
+        "distinct_count": 30
+      },
+      {
+        "name": "name",
+        "dtype": "string",
+        "null_count": 0,
+        "distinct_count": 30
+      },
+      {
+        "name": "email",
+        "dtype": "string",
+        "null_count": 2,
+        "distinct_count": 28
+      },
+      {
+        "name": "phone",
+        "dtype": "string",
+        "null_count": 2,
+        "distinct_count": 28
+      },
+      {
+        "name": "card",
+        "dtype": "string",
+        "null_count": 1,
+        "distinct_count": 29
+      },
+      {
+        "name": "sin",
+        "dtype": "string",
+        "null_count": 1,
+        "distinct_count": 29
+      },
+      {
+        "name": "signup_date",
+        "dtype": "date",
+        "null_count": 0,
+        "distinct_count": 30
+      },
+      {
+        "name": "active",
+        "dtype": "bool",
+        "null_count": 0,
+        "distinct_count": 2
+      },
+      {
+        "name": "age",
+        "dtype": "int",
+        "null_count": 2,
+        "distinct_count": 26
+      }
+    ]
+  },
+  "stats": {
+    "stats": [
+      {
+        "column": "id",
+        "mean": 15.5,
+        "std": 8.803408430829505,
+        "min": 1.0,
+        "max": 30.0,
+        "p50": 15.5
+      },
+      {
+        "column": "age",
+        "mean": 45.035714285714285,
+        "std": 16.826967207337912,
+        "min": 19.0,
+        "max": 75.0,
+        "p50": 46.5
+      }
+    ]
+  },
+  "pii": {
+    "findings": [
+      {
+        "row": 0,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 0,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 0,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 0,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 0,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 1,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 1,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 1,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 1,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 1,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 2,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 2,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 2,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 2,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 3,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 3,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 3,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 3,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 4,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 4,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 4,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 4,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 5,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 5,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 5,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 5,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 6,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 6,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 6,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 6,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 6,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 7,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 7,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 7,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 8,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 8,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 8,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 8,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 9,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 9,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 9,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 9,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 9,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 10,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 10,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 10,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 10,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 10,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 11,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 11,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 11,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 12,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 12,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 12,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 12,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 12,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 13,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 13,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 13,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 13,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 14,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 14,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 14,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 14,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 15,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 15,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 15,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 15,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 16,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 16,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 16,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 16,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 16,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 17,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 17,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 17,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 17,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 18,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 18,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 18,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 18,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 18,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 19,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 19,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 19,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 20,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 20,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 20,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 20,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 21,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 21,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 21,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 21,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 21,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 22,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 22,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 22,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 22,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 23,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 23,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 23,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 24,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 24,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 24,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 24,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 24,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 25,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 25,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 25,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 25,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 25,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 26,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 26,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 26,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 26,
+        "column": "sin",
+        "kind": "SIN"
+      },
+      {
+        "row": 27,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 27,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 27,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 27,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 28,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 28,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 28,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 28,
+        "column": "card",
+        "kind": "CARD"
+      },
+      {
+        "row": 29,
+        "column": "name",
+        "kind": "PERSON_NAME"
+      },
+      {
+        "row": 29,
+        "column": "email",
+        "kind": "EMAIL"
+      },
+      {
+        "row": 29,
+        "column": "phone",
+        "kind": "PHONE"
+      },
+      {
+        "row": 29,
+        "column": "sin",
+        "kind": "SIN"
+      }
+    ]
+  },
+  "regex_candidates": {
+    "id": [],
+    "name": [],
+    "email": [
+      {
+        "index": 0,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 1,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 2,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 3,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 4,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 5,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 6,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 8,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 9,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 10,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 11,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 12,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 13,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 14,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 15,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 16,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 17,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 18,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 20,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 21,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 22,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 23,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 24,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 25,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 26,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 27,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 28,
+        "kind": "EMAIL"
+      },
+      {
+        "index": 29,
+        "kind": "EMAIL"
+      }
+    ],
+    "phone": [
+      {
+        "index": 0,
+        "kind": "PHONE"
+      },
+      {
+        "index": 1,
+        "kind": "PHONE"
+      },
+      {
+        "index": 2,
+        "kind": "PHONE"
+      },
+      {
+        "index": 3,
+        "kind": "PHONE"
+      },
+      {
+        "index": 5,
+        "kind": "PHONE"
+      },
+      {
+        "index": 6,
+        "kind": "PHONE"
+      },
+      {
+        "index": 7,
+        "kind": "PHONE"
+      },
+      {
+        "index": 8,
+        "kind": "PHONE"
+      },
+      {
+        "index": 9,
+        "kind": "PHONE"
+      },
+      {
+        "index": 10,
+        "kind": "PHONE"
+      },
+      {
+        "index": 11,
+        "kind": "PHONE"
+      },
+      {
+        "index": 12,
+        "kind": "PHONE"
+      },
+      {
+        "index": 13,
+        "kind": "PHONE"
+      },
+      {
+        "index": 14,
+        "kind": "PHONE"
+      },
+      {
+        "index": 15,
+        "kind": "PHONE"
+      },
+      {
+        "index": 16,
+        "kind": "PHONE"
+      },
+      {
+        "index": 17,
+        "kind": "PHONE"
+      },
+      {
+        "index": 18,
+        "kind": "PHONE"
+      },
+      {
+        "index": 19,
+        "kind": "PHONE"
+      },
+      {
+        "index": 20,
+        "kind": "PHONE"
+      },
+      {
+        "index": 21,
+        "kind": "PHONE"
+      },
+      {
+        "index": 23,
+        "kind": "PHONE"
+      },
+      {
+        "index": 24,
+        "kind": "PHONE"
+      },
+      {
+        "index": 25,
+        "kind": "PHONE"
+      },
+      {
+        "index": 26,
+        "kind": "PHONE"
+      },
+      {
+        "index": 27,
+        "kind": "PHONE"
+      },
+      {
+        "index": 28,
+        "kind": "PHONE"
+      },
+      {
+        "index": 29,
+        "kind": "PHONE"
+      }
+    ],
+    "card": [
+      {
+        "index": 0,
+        "kind": "CARD"
+      },
+      {
+        "index": 1,
+        "kind": "CARD"
+      },
+      {
+        "index": 2,
+        "kind": "CARD"
+      },
+      {
+        "index": 3,
+        "kind": "CARD"
+      },
+      {
+        "index": 4,
+        "kind": "CARD"
+      },
+      {
+        "index": 5,
+        "kind": "CARD"
+      },
+      {
+        "index": 6,
+        "kind": "CARD"
+      },
+      {
+        "index": 7,
+        "kind": "CARD"
+      },
+      {
+        "index": 8,
+        "kind": "CARD"
+      },
+      {
+        "index": 9,
+        "kind": "CARD"
+      },
+      {
+        "index": 10,
+        "kind": "CARD"
+      },
+      {
+        "index": 12,
+        "kind": "CARD"
+      },
+      {
+        "index": 13,
+        "kind": "CARD"
+      },
+      {
+        "index": 14,
+        "kind": "CARD"
+      },
+      {
+        "index": 15,
+        "kind": "CARD"
+      },
+      {
+        "index": 16,
+        "kind": "CARD"
+      },
+      {
+        "index": 17,
+        "kind": "CARD"
+      },
+      {
+        "index": 18,
+        "kind": "CARD"
+      },
+      {
+        "index": 19,
+        "kind": "CARD"
+      },
+      {
+        "index": 20,
+        "kind": "CARD"
+      },
+      {
+        "index": 21,
+        "kind": "CARD"
+      },
+      {
+        "index": 22,
+        "kind": "CARD"
+      },
+      {
+        "index": 23,
+        "kind": "CARD"
+      },
+      {
+        "index": 24,
+        "kind": "CARD"
+      },
+      {
+        "index": 25,
+        "kind": "CARD"
+      },
+      {
+        "index": 26,
+        "kind": "CARD"
+      },
+      {
+        "index": 27,
+        "kind": "CARD"
+      },
+      {
+        "index": 28,
+        "kind": "CARD"
+      },
+      {
+        "index": 29,
+        "kind": "CARD"
+      }
+    ],
+    "sin": [
+      {
+        "index": 0,
+        "kind": "SIN"
+      },
+      {
+        "index": 1,
+        "kind": "SIN"
+      },
+      {
+        "index": 2,
+        "kind": "SIN"
+      },
+      {
+        "index": 3,
+        "kind": "SIN"
+      },
+      {
+        "index": 4,
+        "kind": "SIN"
+      },
+      {
+        "index": 5,
+        "kind": "SIN"
+      },
+      {
+        "index": 6,
+        "kind": "SIN"
+      },
+      {
+        "index": 7,
+        "kind": "SIN"
+      },
+      {
+        "index": 8,
+        "kind": "SIN"
+      },
+      {
+        "index": 9,
+        "kind": "SIN"
+      },
+      {
+        "index": 10,
+        "kind": "SIN"
+      },
+      {
+        "index": 11,
+        "kind": "SIN"
+      },
+      {
+        "index": 12,
+        "kind": "SIN"
+      },
+      {
+        "index": 14,
+        "kind": "SIN"
+      },
+      {
+        "index": 15,
+        "kind": "SIN"
+      },
+      {
+        "index": 16,
+        "kind": "SIN"
+      },
+      {
+        "index": 17,
+        "kind": "SIN"
+      },
+      {
+        "index": 18,
+        "kind": "SIN"
+      },
+      {
+        "index": 19,
+        "kind": "SIN"
+      },
+      {
+        "index": 20,
+        "kind": "SIN"
+      },
+      {
+        "index": 21,
+        "kind": "SIN"
+      },
+      {
+        "index": 22,
+        "kind": "SIN"
+      },
+      {
+        "index": 23,
+        "kind": "SIN"
+      },
+      {
+        "index": 24,
+        "kind": "SIN"
+      },
+      {
+        "index": 25,
+        "kind": "SIN"
+      },
+      {
+        "index": 26,
+        "kind": "SIN"
+      },
+      {
+        "index": 27,
+        "kind": "SIN"
+      },
+      {
+        "index": 28,
+        "kind": "SIN"
+      },
+      {
+        "index": 29,
+        "kind": "SIN"
+      }
+    ],
+    "signup_date": [],
+    "active": [],
+    "age": []
+  },
+  "luhn_cases": [
+    {
+      "value": "4089 4415 4622 2102",
+      "valid": true
+    },
+    {
+      "value": "5146-8922-0712-4797",
+      "valid": true
+    },
+    {
+      "value": "3731 165113 69430",
+      "valid": false
+    },
+    {
+      "value": "6011 0957 7250 0645",
+      "valid": true
+    },
+    {
+      "value": "4446 9245 3744 4122",
+      "valid": true
+    },
+    {
+      "value": "5100-8543-1321-1121",
+      "valid": false
+    },
+    {
+      "value": "3700 232191 44833",
+      "valid": true
+    },
+    {
+      "value": "6011 9952 6750 1208",
+      "valid": true
+    },
+    {
+      "value": "4245 9977 2674 1495",
+      "valid": false
+    },
+    {
+      "value": "5176-7591-1863-2049",
+      "valid": true
+    },
+    {
+      "value": "3738 543992 38772",
+      "valid": true
+    },
+    {
+      "value": "4722 8831 1458 2974",
+      "valid": true
+    },
+    {
+      "value": "5128-8207-0185-1831",
+      "valid": true
+    },
+    {
+      "value": "3772 529258 53158",
+      "valid": false
+    },
+    {
+      "value": "6011 2685 1684 7073",
+      "valid": true
+    },
+    {
+      "value": "4102 7863 4227 0116",
+      "valid": true
+    },
+    {
+      "value": "5124-4611-2429-5481",
+      "valid": false
+    },
+    {
+      "value": "3724 732529 21407",
+      "valid": true
+    },
+    {
+      "value": "6011 0010 8136 6538",
+      "valid": true
+    },
+    {
+      "value": "4198 1628 5712 6830",
+      "valid": false
+    },
+    {
+      "value": "5118-9543-7077-8140",
+      "valid": true
+    },
+    {
+      "value": "3725 388026 56339",
+      "valid": true
+    },
+    {
+      "value": "6011 9536 8539 6376",
+      "valid": false
+    },
+    {
+      "value": "4068 5664 6572 6207",
+      "valid": true
+    },
+    {
+      "value": "4111 1111 1111 1111",
+      "valid": true
+    },
+    {
+      "value": "4111 1111 1111 1112",
+      "valid": false
+    },
+    {
+      "value": "6011 6438 4365 8791",
+      "valid": true
+    },
+    {
+      "value": "4293 3664 9379 5515",
+      "valid": true
+    },
+    {
+      "value": "5130-2510-3972-2553",
+      "valid": false
+    }
+  ],
+  "sin_cases": [
+    {
+      "value": "142 578 657",
+      "valid": true
+    },
+    {
+      "value": "232 911 735",
+      "valid": true
+    },
+    {
+      "value": "314 948 431",
+      "valid": true
+    },
+    {
+      "value": "456 155 230",
+      "valid": false
+    },
+    {
+      "value": "535 085 427",
+      "valid": true
+    },
+    {
+      "value": "678 367 434",
+      "valid": true
+    },
+    {
+      "value": "743 079 774",
+      "valid": true
+    },
+    {
+      "value": "930 400 041",
+      "valid": false
+    },
+    {
+      "value": "139 130 249",
+      "valid": true
+    },
+    {
+      "value": "256 000 613",
+      "valid": true
+    },
+    {
+      "value": "305 776 122",
+      "valid": true
+    },
+    {
+      "value": "404 573 840",
+      "valid": false
+    },
+    {
+      "value": "550 705 388",
+      "valid": true
+    },
+    {
+      "value": "750 164 360",
+      "valid": true
+    },
+    {
+      "value": "905 421 347",
+      "valid": false
+    },
+    {
+      "value": "187 247 523",
+      "valid": true
+    },
+    {
+      "value": "286 766 852",
+      "valid": true
+    },
+    {
+      "value": "345 118 939",
+      "valid": true
+    },
+    {
+      "value": "492 984 839",
+      "valid": false
+    },
+    {
+      "value": "596 509 307",
+      "valid": true
+    },
+    {
+      "value": "623 532 769",
+      "valid": true
+    },
+    {
+      "value": "724 030 317",
+      "valid": true
+    },
+    {
+      "value": "946 294 509",
+      "valid": false
+    },
+    {
+      "value": "144 042 876",
+      "valid": true
+    },
+    {
+      "value": "262 667 181",
+      "valid": true
+    },
+    {
+      "value": "357 748 201",
+      "valid": true
+    },
+    {
+      "value": "443 327 336",
+      "valid": false
+    },
+    {
+      "value": "046 454 286",
+      "valid": false
+    },
+    {
+      "value": "642 211 890",
+      "valid": true
+    }
+  ],
+  "units": {
+    "conversions": []
+  },
+  "conversion_checks": []
+}

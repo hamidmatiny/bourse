@@ -1,0 +1,254 @@
+{
+  "csv": "measurements.csv",
+  "n_rows": 25,
+  "n_cols": 6,
+  "profile": {
+    "columns": [
+      {
+        "name": "sample_id",
+        "dtype": "int",
+        "null_count": 0,
+        "distinct_count": 25
+      },
+      {
+        "name": "weight_lb",
+        "dtype": "float",
+        "null_count": 0,
+        "distinct_count": 25
+      },
+      {
+        "name": "temp_F",
+        "dtype": "float",
+        "null_count": 0,
+        "distinct_count": 24
+      },
+      {
+        "name": "dist_km",
+        "dtype": "float",
+        "null_count": 1,
+        "distinct_count": 24
+      },
+      {
+        "name": "dur_min",
+        "dtype": "int",
+        "null_count": 0,
+        "distinct_count": 23
+      },
+      {
+        "name": "site",
+        "dtype": "string",
+        "null_count": 0,
+        "distinct_count": 4
+      }
+    ]
+  },
+  "stats": {
+    "stats": [
+      {
+        "column": "sample_id",
+        "mean": 112.0,
+        "std": 7.359800721939872,
+        "min": 100.0,
+        "max": 124.0,
+        "p50": 112.0
+      },
+      {
+        "column": "weight_lb",
+        "mean": 166.06,
+        "std": 47.01367708798508,
+        "min": 100.3,
+        "max": 236.7,
+        "p50": 171.8
+      },
+      {
+        "column": "temp_F",
+        "mean": 46.452,
+        "std": 43.70949667978345,
+        "min": -0.4,
+        "max": 212.0,
+        "p50": 34.8
+      },
+      {
+        "column": "dist_km",
+        "mean": 22.415833333333335,
+        "std": 13.93392260906319,
+        "min": 0.53,
+        "max": 40.45,
+        "p50": 23.47
+      },
+      {
+        "column": "dur_min",
+        "mean": 137.88,
+        "std": 70.77918714801218,
+        "min": 15.0,
+        "max": 232.0,
+        "p50": 144.0
+      }
+    ]
+  },
+  "pii": {
+    "findings": []
+  },
+  "regex_candidates": {
+    "sample_id": [],
+    "weight_lb": [],
+    "temp_F": [],
+    "dist_km": [],
+    "dur_min": [],
+    "site": []
+  },
+  "luhn_cases": [],
+  "sin_cases": [],
+  "units": {
+    "conversions": [
+      {
+        "column": "weight_lb",
+        "dimension": "mass",
+        "from_unit": "lb",
+        "to_unit": "kg",
+        "factor": 0.45359237,
+        "offset": 0.0
+      },
+      {
+        "column": "temp_F",
+        "dimension": "temperature",
+        "from_unit": "degF",
+        "to_unit": "degC",
+        "factor": 0.5555555555555556,
+        "offset": -17.77777777777778
+      },
+      {
+        "column": "dist_km",
+        "dimension": "length",
+        "from_unit": "km",
+        "to_unit": "m",
+        "factor": 1000.0,
+        "offset": 0.0
+      },
+      {
+        "column": "dur_min",
+        "dimension": "duration",
+        "from_unit": "min",
+        "to_unit": "s",
+        "factor": 60.0,
+        "offset": 0.0
+      }
+    ]
+  },
+  "conversion_checks": [
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 236.7,
+      "expected": 107.365313979
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": 67.9,
+      "expected": 19.944444444444446
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 136.0,
+      "expected": 8160.0
+    },
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 119.8,
+      "expected": 54.340365926000004
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": 28.2,
+      "expected": -2.1111111111111116
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 222.0,
+      "expected": 13320.0
+    },
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 144.3,
+      "expected": 65.45337899100001
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": -0.4,
+      "expected": -18.0
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 180.0,
+      "expected": 10800.0
+    },
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 190.7,
+      "expected": 86.500064959
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": 32.0,
+      "expected": 0.0
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 143.0,
+      "expected": 8580.0
+    },
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 103.7,
+      "expected": 47.037528769000005
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": 212.0,
+      "expected": 100.0
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 15.0,
+      "expected": 900.0
+    },
+    {
+      "from_unit": "lb",
+      "to_unit": "kg",
+      "value": 113.6,
+      "expected": 51.528093232
+    },
+    {
+      "from_unit": "degF",
+      "to_unit": "degC",
+      "value": 34.8,
+      "expected": 1.555555555555554
+    },
+    {
+      "from_unit": "min",
+      "to_unit": "s",
+      "value": 40.0,
+      "expected": 2400.0
+    },
+    {
+      "from_unit": "km",
+      "to_unit": "m",
+      "value": 1.5,
+      "expected": 1500.0
+    }
+  ]
+}

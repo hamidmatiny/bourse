@@ -1,7 +1,13 @@
 """Typed contracts: the only interface between BOURSE components (ADR-0004)."""
 
 from bourse.contracts.approval import ApprovalDecision, ApprovalRequest, ApprovalTrigger
-from bourse.contracts.metering import BudgetSpec, LedgerEntry, Usage
+from bourse.contracts.metering import (
+    BudgetSpec,
+    LedgerEntry,
+    LlmUsageRecord,
+    ToolCallRecord,
+    Usage,
+)
 from bourse.contracts.probe import ProbeReport
 from bourse.contracts.registry import (
     AgentRecord,
@@ -31,6 +37,7 @@ __all__ = [
     "CardRevision",
     "IntakeRequest",
     "LedgerEntry",
+    "LlmUsageRecord",
     "ProbeReport",
     "RegisterRequest",
     "RegistrationOutcome",
@@ -41,6 +48,7 @@ __all__ = [
     "StateTransition",
     "Subtask",
     "TaskDAG",
+    "ToolCallRecord",
     "TrustState",
     "Usage",
     "Vendor",

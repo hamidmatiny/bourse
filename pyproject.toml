@@ -8,8 +8,10 @@ dependencies = [
     "a2a-sdk==1.2.3",
     "alembic==1.20.1",
     "anyio==4.15.1",
+    "duckdb==2.0.0",
     "fastapi==0.162.0",
     "httpx==0.28.1",
+    "jsonschema==4.26.0",
     "jwcrypto==1.6.1",
     "langchain-core==1.7.3",
     "langgraph==1.2.18",
@@ -53,9 +55,9 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 files = ["src", "tests"]
 
-# jwcrypto and protobuf ship no type information (no py.typed, no stubs that track protobuf 7).
+# jwcrypto, protobuf and jsonschema ship no type information (no py.typed, no stubs that track protobuf 7).
 [[tool.mypy.overrides]]
-module = ["jwcrypto.*", "google.protobuf.*"]
+module = ["jwcrypto.*", "google.protobuf.*", "jsonschema.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

@@ -5,7 +5,7 @@ import json
 import platform
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import httpx
 import typer
@@ -26,10 +26,14 @@ keys_app = typer.Typer(no_args_is_help=True, help="Vendor signing keys.")
 card_app = typer.Typer(no_args_is_help=True, help="Sign and verify Agent Cards.")
 registry_app = typer.Typer(no_args_is_help=True, help="Agent registry service.")
 attacks_app = typer.Typer(no_args_is_help=True, help="Deterministic attack suites.")
+mcp_app = typer.Typer(no_args_is_help=True, help="Pure MCP tool servers.")
+meter_app = typer.Typer(no_args_is_help=True, help="Metering LLM proxy.")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
 app.add_typer(attacks_app, name="attacks")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(meter_app, name="meter")
 
 
 def _pkg_version(name: str) -> str:
@@ -179,6 +183,66 @@ def attacks_phase1(
     results = asyncio.run(run_phase1(Path(fixtures)))
     typer.echo(format_table(results))
     raise typer.Exit(0 if all(r.caught for r in results) else 1)
+
+
+@mcp_app.command("serve")
+def mcp_serve(
+    server: Annotated[str, typer.Argument(help="table | pii | units")],
+    port: Annotated[
+        int | None, typer.Option(help="Default: table 55101, pii 55102, units 55103")
+    ] = None,
+) -> None:
+    """Serve one tool server over streamable HTTP (stateless, 127.0.0.1 only)."""
+    from bourse.mcp_servers.registry import ServerName, serve
+
+    if server not in ("table", "pii", "units"):
+        raise typer.BadParameter("server must be table, pii or units")
+    serve(cast(ServerName, server), port)
+
+
+@meter_app.command("serve")
+def meter_serve(
+    port: Annotated[int, typer.Option()] = 55200,
+) -> None:
+    """Serve the metering proxy on 127.0.0.1 (usage rows to Postgres)."""
+    import uvicorn
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.llm.base import Provider
+    from bourse.llm.ollama import OllamaProvider
+    from bourse.llm.omniroute import OmniRouteProvider
+    from bourse.meter.app import MeterConfig, create_meter_app
+    from bourse.meter.keys import parse_keys
+    from bourse.meter.repo_sql import SqlMeterRepository
+
+    settings = get_settings()
+    keys = parse_keys(settings.bourse_meter_keys.get_secret_value())
+    if not keys:
+        raise typer.BadParameter("BOURSE_METER_KEYS is empty; set agent_id:key pairs in .env")
+    client = httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT)
+    providers: dict[str, list[Provider]] = {}
+    for model in (settings.bourse_model_large, settings.bourse_model_small):
+        chain: list[Provider] = [OllamaProvider(settings.ollama_base_url, model, client)]
+        if settings.omniroute_model:
+            chain.append(
+                OmniRouteProvider(
+                    settings.omniroute_base_url,
+                    settings.omniroute_model,
+                    settings.omniroute_api_key.get_secret_value(),
+                    client,
+                )
+            )
+        providers[model] = chain
+    app_ = create_meter_app(
+        providers=providers,
+        keys=keys,
+        repo=SqlMeterRepository(create_async_engine(settings.bourse_database_url)),
+        config=MeterConfig(
+            max_tokens_per_call=settings.bourse_meter_max_tokens_per_call,
+            deadline_s=settings.bourse_meter_deadline_s,
+        ),
+    )
+    uvicorn.run(app_, host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

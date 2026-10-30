@@ -10,8 +10,10 @@ from bourse.contracts.metering import Usage
 from bourse.llm.base import (
     ChatMessage,
     ChatResult,
+    FinishReason,
     ToolCall,
     ToolSpec,
+    ollama_message,
     parse_arguments,
     tool_payload,
 )
@@ -50,7 +52,7 @@ class OllamaProvider:
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self._model,
-            "messages": [m.model_dump() for m in messages],
+            "messages": [ollama_message(m) for m in messages],
             "stream": False,
             "think": False,
             "options": {"num_predict": max_tokens},
@@ -79,6 +81,7 @@ class OllamaProvider:
             ToolCall(
                 name=str(c.get("function", {}).get("name", "")),
                 arguments=parse_arguments(c.get("function", {}).get("arguments", {})),
+                id=c.get("id"),
             )
             for c in (message.get("tool_calls") or [])
         )
@@ -89,7 +92,15 @@ class OllamaProvider:
             model=self._model,
             provider=self.name,
         )
-        return ChatResult(text=str(message.get("content") or ""), tool_calls=calls, usage=usage)
+        finish: FinishReason = (
+            "tool_calls" if calls else "length" if data.get("done_reason") == "length" else "stop"
+        )
+        return ChatResult(
+            text=str(message.get("content") or ""),
+            tool_calls=calls,
+            usage=usage,
+            finish_reason=finish,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

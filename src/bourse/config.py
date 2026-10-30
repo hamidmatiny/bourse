@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     bourse_admin_token: SecretStr = SecretStr("")
     # Comma-separated hosts accepted for any vendor's card URLs (dev only, e.g. localhost).
     bourse_dev_hosts: str = ""
+    # Metering proxy: "agent_id:key,agent_id:key" (keys >= 16 chars). Never committed.
+    bourse_meter_keys: SecretStr = SecretStr("")
+    bourse_meter_max_tokens_per_call: int = 2048
+    bourse_meter_deadline_s: float = 120.0
 
     @property
     def dev_hosts(self) -> frozenset[str]:
