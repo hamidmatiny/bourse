@@ -34,6 +34,17 @@ _PROBE_TOOL: dict[str, Any] = {
 }
 
 
+# Not exposed by the Ollama 0.40.6 HTTP API; recorded so the report says they were not checked.
+HOST_SETTINGS = (
+    "OLLAMA_FLASH_ATTENTION",
+    "OLLAMA_KV_CACHE_TYPE",
+    "OLLAMA_MAX_LOADED_MODELS",
+    "OLLAMA_NUM_PARALLEL",
+    "OLLAMA_CONTEXT_LENGTH",
+)
+UNVERIFIED = "unverified"
+
+
 async def run_probe(
     client: httpx.AsyncClient,
     base_url: str,
@@ -118,6 +129,10 @@ async def run_probe(
     loaded = ps_resp.json().get("models") or []
     resident_bytes = sum(int(m.get("size") or 0) for m in loaded)
     resident_ok = resident_bytes < RESIDENT_LIMIT_BYTES and len(loaded) <= MAX_RESIDENT_MODELS
+    server_settings = dict.fromkeys(HOST_SETTINGS, UNVERIFIED)
+    for m in loaded:
+        if m.get("context_length") is not None:
+            server_settings[f"context_length:{m.get('name', '')}"] = str(m["context_length"])
 
     report = ProbeReport(
         ollama_version=version,
@@ -128,6 +143,7 @@ async def run_probe(
         resident_bytes=resident_bytes,
         resident_ok=resident_ok,
         latency_ms=latency_ms,
+        server_settings=server_settings,
     )
     written: Path | None = None
     if out_dir is not None:

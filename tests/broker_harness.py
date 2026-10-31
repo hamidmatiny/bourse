@@ -4,6 +4,7 @@ fake metering proxy, all behind one httpx transport. No sockets, no network."""
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -26,7 +27,13 @@ from bourse.broker.delegate import Delegator, RegistryClient
 from bourse.broker.graph import Broker
 from bourse.broker.planner import TEMPLATE_PLAN, PlanSubmission
 from bourse.broker.repo import InMemoryRunRepository
-from bourse.broker.select import PriorConfig, PriorPolicy
+from bourse.broker.select import (
+    MeasuredConfig,
+    MeasuredPolicy,
+    PriorConfig,
+    PriorPolicy,
+    SelectionPolicy,
+)
 from bourse.contracts.broker import IntakeReport
 from bourse.contracts.metering import BudgetSpec
 from bourse.contracts.registry import RegisterRequest
@@ -35,9 +42,13 @@ from bourse.contracts.skills_io import DatasetRef
 from bourse.contracts.tasks import IntakeRequest
 from bourse.contracts.trust import TrustState
 from bourse.crypto.jcs import card_to_dict
+from bourse.ledger.prices import load_prices
+from bourse.ledger.recorder import LedgerRecorder
+from bourse.ledger.repo import InMemoryLedgerRepository
 from bourse.llm.omniroute import OpenAICompatProvider
 from bourse.llm.router import Router
 from bourse.llm.submit_tool import ChatClient
+from bourse.mcp_servers.usage import InMemoryToolUsageRepository
 from bourse.meter.repo import InMemoryMeterRepository
 from bourse.registry.app import create_app
 from bourse.registry.service import RegistryPolicy
@@ -45,6 +56,7 @@ from bourse.registry.state import transition
 from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.budget import BudgetLedger
 from bourse.runtime.executor import LlmOnlyExecutor
+from bourse.telemetry import traced_async_client
 from tests.agent_harness import METER, METER_CHAT, submit_call
 from tests.datasets import csv_text, truth
 from tests.registry_helpers import Party, make_party, make_service
@@ -53,6 +65,7 @@ REGISTRY = "http://registry.test"
 ADMIN = secrets.token_hex(16)
 DATASET = "people"
 TRUTH = truth(DATASET)
+PRICES = load_prices(Path(__file__).resolve().parents[1] / "config" / "prices.toml")
 SPEC = BudgetSpec(max_tokens_per_call=512, max_tokens_run=20_000, wall_budget_s=60.0)
 
 
@@ -183,10 +196,13 @@ class BrokerBed:
     usage: InMemoryMeterRepository = field(default_factory=InMemoryMeterRepository)
     breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     checkpointer: InMemorySaver = field(default_factory=InMemorySaver)
+    ledger: InMemoryLedgerRepository = field(default_factory=InMemoryLedgerRepository)
+    tool_usage: InMemoryToolUsageRepository = field(default_factory=InMemoryToolUsageRepository)
+    measured: MeasuredConfig | None = None  # None -> PriorPolicy (Phase 3 tests)
 
     async def setup(self) -> "BrokerBed":
         parties = {a.party.domain: a.party for a in self.agents}
-        self.http = httpx.AsyncClient(transport=self.transport, timeout=30)
+        self.http = traced_async_client(transport=self.transport, timeout=30)
         service = await make_service(
             *parties.values(),
             client=self.http,
@@ -254,12 +270,18 @@ class BrokerBed:
             self.breaker,
             deadline_s=self.deadline_s,
             grace_s=self.grace_s,
+            ledger=LedgerRecorder(self.ledger, self.usage, self.tool_usage, PRICES),
+        )
+        policy: SelectionPolicy = (
+            PriorPolicy(PriorConfig())
+            if self.measured is None
+            else MeasuredPolicy(self.measured, PriorConfig(), self.ledger)
         )
         broker = Broker(
             planner_llm=self.planner_llm,
             registry=registry,
             delegator=delegator,
-            policy=PriorPolicy(PriorConfig()),
+            policy=policy,
             runs=self.runs,
             usage=self.usage,
             executor=LlmOnlyExecutor(self.llm_slots),
@@ -267,6 +289,7 @@ class BrokerBed:
             checkpointer=self.checkpointer,
             wall_budget_s=wall_budget_s,
             heartbeat_timeout_s=wall_budget_s,
+            ledger=self.ledger,
         )
         delegator.heartbeat = broker.beat
         return broker

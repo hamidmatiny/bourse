@@ -17,6 +17,7 @@ from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, Part
 from google.protobuf.json_format import MessageToDict
+from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 
 from bourse.agents.common.context import TaskContext
@@ -119,6 +120,10 @@ class SkillExecutor(AgentExecutor, abc.ABC):
             await updater.reject(self._status(updater, rej.kind, rej.detail))
             return
 
+        span = trace.get_current_span()
+        span.set_attribute("skill", req.skill.value)
+        span.set_attribute("task_id", req.task_id)
+        span.set_attribute("agent_id", self.spec.name)
         await updater.start_work()
         ctx = TaskContext(
             spec=self.spec,

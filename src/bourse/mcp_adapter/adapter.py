@@ -10,14 +10,16 @@
 
 import threading
 import time
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
 from langchain_core.tools import StructuredTool
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import MCPServer
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from bourse.contracts.metering import ToolCallRecord
@@ -148,10 +150,26 @@ async def mcp_tools_as_langchain(
     budget: ToolBudget | None = None,
     on_call: Callable[[ToolCallRecord], None] | None = None,
     client_factory: ClientFactory | None = None,
+    headers: Callable[[], dict[str, str]] | None = None,
 ) -> list[StructuredTool]:
-    """Build LangChain tools for the allowlisted MCP tools on `server` (URL or in-process)."""
+    """Build LangChain tools for the allowlisted MCP tools on `server` (URL or in-process).
+
+    For a URL server, `headers()` is evaluated per connection (agent key, task id, traceparent;
+    ADR-0029, ADR-0032). In-process servers take no headers.
+    """
+
+    @asynccontextmanager
+    async def http_client_with_headers(url: str) -> AsyncIterator[ToolClient]:
+        hdrs = headers() if headers is not None else {}
+        async with (
+            create_mcp_http_client(headers=hdrs) as http,
+            Client(streamable_http_client(url, http_client=http)) as client,
+        ):
+            yield client
 
     def default_factory() -> AbstractAsyncContextManager[ToolClient]:
+        if isinstance(server, str) and headers is not None:
+            return http_client_with_headers(server)
         return Client(server)
 
     factory: ClientFactory = client_factory or default_factory

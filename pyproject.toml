@@ -23,6 +23,7 @@ dependencies = [
     "opentelemetry-api==1.45.2",
     "opentelemetry-exporter-otlp==1.45.2",
     "opentelemetry-sdk==1.45.2",
+    "pandas==3.1.0",
     "pandera==0.35.0",
     "psycopg[binary]==3.3.6",
     "pydantic==2.14.2",
@@ -60,8 +61,9 @@ mypy_path = "src"
 files = ["src", "tests"]
 
 # jwcrypto, protobuf and jsonschema ship no type information (no py.typed, no stubs that track protobuf 7).
+# pandas 3.1 ships no py.typed; it is only used to hand a frame to pandera and DuckDB (ADR-0029).
 [[tool.mypy.overrides]]
-module = ["jwcrypto.*", "google.protobuf.*", "jsonschema.*"]
+module = ["jwcrypto.*", "google.protobuf.*", "jsonschema.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

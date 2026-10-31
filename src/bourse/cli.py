@@ -33,6 +33,8 @@ stack_app = typer.Typer(no_args_is_help=True, help="Local stack of all services.
 smoke_app = typer.Typer(no_args_is_help=True, help="Smoke runs against the local stack.")
 runs_app = typer.Typer(no_args_is_help=True, help="Broker run records.")
 e2e_app = typer.Typer(no_args_is_help=True, help="Broker end-to-end runs on fixtures.")
+usage_app = typer.Typer(no_args_is_help=True, help="Metered LLM usage.")
+ledger_app = typer.Typer(no_args_is_help=True, help="Delegation ledger.")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
@@ -44,6 +46,8 @@ app.add_typer(stack_app, name="stack")
 app.add_typer(smoke_app, name="smoke")
 app.add_typer(runs_app, name="runs")
 app.add_typer(e2e_app, name="e2e")
+app.add_typer(usage_app, name="usage")
+app.add_typer(ledger_app, name="ledger")
 
 
 def _pkg_version(name: str) -> str:
@@ -231,7 +235,10 @@ def meter_serve(
     keys = parse_keys(settings.bourse_meter_keys.get_secret_value())
     if not keys:
         raise typer.BadParameter("BOURSE_METER_KEYS is empty; set agent_id:key pairs in .env")
-    client = httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT)
+    from bourse.telemetry import setup_tracing, traced_async_client
+
+    setup_tracing("bourse-meter", settings.otel_exporter_otlp_endpoint)
+    client = traced_async_client(timeout=DEFAULT_HTTP_TIMEOUT)
     providers: dict[str, list[Provider]] = {}
     for model in (settings.bourse_model_large, settings.bourse_model_small):
         chain: list[Provider] = [OllamaProvider(settings.ollama_base_url, model, client)]
@@ -406,10 +413,11 @@ def run_cmd(
 
     async def run() -> int:
         csv_text, truth = load_fixture(dataset)
-        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as broker:
+        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as session:
             typer.echo(f"dataset {dataset}")
-            report = await broker.start(intake(settings, csv_text, request))
-            rows = await subtask_rows(broker, report, truth)
+            report = await session.broker.start(intake(settings, csv_text, request))
+            rows = await subtask_rows(session.broker, report, truth)
+            resident = session.monitor.summary()
         typer.echo(table(subtask_table(rows)))
         typer.echo(f"run {report.run_id} {report.status.value} planner={report.planner_used}")
         if report.abort_reason:
@@ -417,6 +425,8 @@ def run_cmd(
         typer.echo(f"graded passed {sum(r.passed for r in rows)}/{len(rows)}")
         typer.echo(f"tokens in {report.tokens_in} out {report.tokens_out}")
         typer.echo(f"wall_s {report.wall_ms / 1000:.1f}")
+        typer.echo(resident)
+        typer.echo(f"trace {report.trace_id}")
         return 0 if report.status.value == "SUCCEEDED" else 1
 
     raise typer.Exit(asyncio.run(run()))
@@ -473,9 +483,11 @@ def runs_resume(run_id: Annotated[str, typer.Argument(help="Run id")]) -> None:
     settings = get_settings()
 
     async def resume() -> int:
-        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as broker:
-            report = await broker.resume(run_id)
+        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as session:
+            report = await session.broker.resume(run_id)
+            resident = session.monitor.summary()
         typer.echo(f"run {report.run_id} {report.status.value}")
+        typer.echo(resident)
         return 0 if report.status.value == "SUCCEEDED" else 1
 
     raise typer.Exit(asyncio.run(resume()))
@@ -486,8 +498,9 @@ def e2e_all_cmd(
     datasets: Annotated[str, typer.Option(help="Comma-separated dataset names")] = (
         "people,measurements,orders"
     ),
+    repeat: Annotated[int, typer.Option(min=1, help="Passes over the datasets")] = 1,
 ) -> None:
-    """Broker run per fixture with progress + ETA; writes data/e2e/e2e-<utc>.json."""
+    """Broker runs per fixture x repeat with progress + ETA; writes data/e2e/e2e-<utc>.json."""
     from bourse.broker.runner import e2e_all, e2e_summary
     from bourse.stack.launcher import table
 
@@ -495,11 +508,14 @@ def e2e_all_cmd(
 
     async def run() -> int:
         names = tuple(d.strip() for d in datasets.split(",") if d.strip())
-        rows, out = await e2e_all(settings, names, echo=lambda line: typer.echo(line))
-        header = ["dataset", "run_id", "status", "planner", "graded", "fallbacks", "tokens"]
+        rows, out, peak = await e2e_all(
+            settings, names, echo=lambda line: typer.echo(line), repeat=repeat
+        )
+        header = ["dataset", "rep", "run_id", "status", "planner", "graded", "fallbacks", "tokens"]
         body = [
             [
                 r.dataset,
+                str(r.repeat),
                 r.run_id,
                 r.status,
                 r.planner_used,
@@ -510,12 +526,165 @@ def e2e_all_cmd(
             for r in rows
         ]
         typer.echo(table([header, *body]))
-        for line in e2e_summary(rows):
+        for line in e2e_summary(rows, peak, settings.bourse_resident_limit_bytes):
             typer.echo(line)
         typer.echo(f"written: {out}")
-        return 0 if all(r.status == "SUCCEEDED" for r in rows) else 1
+        ok = all(r.status == "SUCCEEDED" for r in rows)
+        return 0 if ok and peak <= settings.bourse_resident_limit_bytes else 1
 
     raise typer.Exit(asyncio.run(run()))
+
+
+@usage_app.command("maxcall")
+def usage_maxcall() -> None:
+    """Max, p50, p95 of tokens_in + tokens_out per LLM call, per model (ADR-0033)."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.meter.repo_sql import SqlMeterRepository
+    from bourse.meter.stats import maxcall_rows, recommend_num_ctx
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def show() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            usage = await SqlMeterRepository(engine).list_usage()
+        finally:
+            await engine.dispose()
+        rows = maxcall_rows(usage)
+        out = [["model", "calls", "max", "p50", "p95"]]
+        out += [[r.model, str(r.calls), str(r.max), str(r.p50), str(r.p95)] for r in rows]
+        typer.echo(table(out))
+        overall = max((r.max for r in rows), default=0)
+        typer.echo(f"max tokens per call {overall}")
+        typer.echo(
+            f"recommended num_ctx {recommend_num_ctx(overall)} "
+            "(smallest of 4096/6144/8192 >= 2 x max)"
+        )
+        typer.echo(f"configured BOURSE_METER_NUM_CTX {settings.bourse_meter_num_ctx}")
+        return 0
+
+    raise typer.Exit(asyncio.run(show()))
+
+
+@app.command("scores")
+def scores_cmd() -> None:
+    """Reliability (Wilson 95% LB from spot-checked ledger rows) and EWMA cost/latency."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.broker.reliability import scores
+    from bourse.ledger.repo_sql import SqlLedgerRepository
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def show() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            rows = await SqlLedgerRepository(engine).list_rows()
+        finally:
+            await engine.dispose()
+        out = [["agent", "skill", "major", "s", "f", "wilson_lb", "ewma_usd", "ewma_wall_s"]]
+        for sc in scores(rows, settings.bourse_select_ewma_alpha):
+            out.append(
+                [
+                    sc.agent_id,
+                    sc.skill.value,
+                    str(sc.agent_major),
+                    str(sc.s),
+                    str(sc.f),
+                    f"{sc.wilson_lb:.4f}",
+                    "-" if sc.ewma_usd is None else f"{sc.ewma_usd:.8f}",
+                    "-" if sc.ewma_wall_ms is None else f"{sc.ewma_wall_ms / 1000:.1f}",
+                ]
+            )
+        typer.echo(table(out))
+        typer.echo(f"ledger rows {len(rows)}")
+        return 0
+
+    raise typer.Exit(asyncio.run(show()))
+
+
+@ledger_app.command("show")
+def ledger_show(run: Annotated[str, typer.Option("--run", help="Run id")]) -> None:
+    """Ledger rows of one run."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.ledger.repo_sql import SqlLedgerRepository
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def show() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            rows = await SqlLedgerRepository(engine).list_rows(run_id=run)
+        finally:
+            await engine.dispose()
+        out = [
+            [
+                "subtask",
+                "att",
+                "agent",
+                "skill",
+                "state",
+                "tokens",
+                "tools",
+                "shadow_usd",
+                "spot",
+                "wall_s",
+            ]
+        ]
+        for r in rows:
+            out.append(
+                [
+                    r.subtask_id,
+                    str(r.attempt),
+                    r.agent_id,
+                    r.skill.value,
+                    r.state.value,
+                    f"{r.tokens_in}/{r.tokens_out}",
+                    str(r.tool_calls),
+                    f"{r.shadow_usd:.8f}",
+                    "-" if r.spot_check_passed is None else str(r.spot_check_passed),
+                    f"{r.wall_ms / 1000:.1f}",
+                ]
+            )
+        typer.echo(table(out))
+        typer.echo(f"ledger rows {len(rows)}")
+        return 0 if rows else 1
+
+    raise typer.Exit(asyncio.run(show()))
+
+
+@ledger_app.command("export")
+def ledger_export(
+    out: Annotated[Path | None, typer.Option(help="Parquet path")] = None,
+) -> None:
+    """All ledger rows to parquet, validated by the pandera schema first."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.ledger.export import export_parquet
+    from bourse.ledger.repo_sql import SqlLedgerRepository
+
+    settings = get_settings()
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    target = out or Path("data/exports") / f"ledger-{stamp}.parquet"
+
+    async def export() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            rows = await SqlLedgerRepository(engine).list_rows()
+        finally:
+            await engine.dispose()
+        n = export_parquet(rows, target)
+        typer.echo(f"exported {n} rows: {target}")
+        return 0
+
+    raise typer.Exit(asyncio.run(export()))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from bourse.broker.repo import RunRepository
+from bourse.broker.spotcheck import spot_check
 from bourse.contracts.broker import (
     DelegationRecord,
     DelegationState,
@@ -30,10 +31,12 @@ from bourse.contracts.skills_io import SKILL_IO, DatasetRef, ReportIn
 from bourse.contracts.tasks import Subtask
 from bourse.contracts.trust import Severity, TrustState, ViolationReport
 from bourse.crypto.jcs import card_from_dict, payload_digest
+from bourse.ledger.recorder import LedgerRecorder, agent_major
 from bourse.registry.fetch import FetchFailed, fetch_card
 from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.deadline import DeadlineExceeded, deadline
 from bourse.stack.smoke import send_task
+from bourse.telemetry import tracer
 
 MAX_ATTEMPTS = 2
 # The agent enforces deadline_s itself; the broker's wall-clock deadline adds this margin for
@@ -111,6 +114,7 @@ class Delegator:
         max_attempts: int = MAX_ATTEMPTS,
         grace_s: float = DEADLINE_GRACE_S,
         heartbeat: Callable[[], None] = lambda: None,
+        ledger: LedgerRecorder | None = None,
     ) -> None:
         self.registry = registry
         self.http = http
@@ -119,6 +123,7 @@ class Delegator:
         self.deadline_s = deadline_s
         self.max_attempts = max_attempts
         self.grace_s = grace_s
+        self.ledger = ledger
         self.heartbeat = heartbeat
 
     async def run_subtask(
@@ -148,10 +153,27 @@ class Delegator:
             if self.breaker.tripped:
                 raise RunAborted(self.breaker.reason or "breaker open")
             attempt += 1
-            record, output, detail = await self._attempt(
-                run_id, subtask, agents[agent_id], attempt, payload
-            )
-            await self.runs.add_delegation(record)
+            agent = agents[agent_id]
+            with tracer().start_as_current_span("delegation attempt") as span:
+                span.set_attribute("run_id", run_id)
+                span.set_attribute("subtask_id", subtask.id)
+                span.set_attribute("skill", subtask.skill.value)
+                span.set_attribute("agent_id", agent_id)
+                span.set_attribute("attempt", attempt)
+                record, output, detail, spot = await self._attempt(
+                    run_id, subtask, agent, attempt, payload
+                )
+                await self.runs.add_delegation(record)
+                span.set_attribute("outcome", record.state.value)
+                if detail:
+                    span.set_attribute("detail", detail[:200])
+                if self.ledger is not None:
+                    row = await self.ledger.record(
+                        record, major=agent_major(agent.current_version), spot_check_passed=spot
+                    )
+                    span.set_attribute("tokens_in", row.tokens_in)
+                    span.set_attribute("tokens_out", row.tokens_out)
+                    span.set_attribute("shadow_usd", row.shadow_usd)
             self.heartbeat()
             if record.state is DelegationState.COMPLETED:
                 return SubtaskResult(
@@ -182,7 +204,9 @@ class Delegator:
         agent: AgentRecord,
         attempt: int,
         payload: BaseModel,
-    ) -> tuple[DelegationRecord, dict[str, Any] | None, str]:
+    ) -> tuple[DelegationRecord, dict[str, Any] | None, str, bool | None]:
+        """Returns (row, output, detail, spot_check_passed); spot is None unless a
+        contract-valid output was checked."""
         started = time.monotonic()
 
         def record(state: DelegationState, kind: str | None) -> DelegationRecord:
@@ -200,15 +224,15 @@ class Delegator:
             )
 
         if agent.card_url is None:
-            return record(DelegationState.ERROR, "no_card_url"), None, ""
+            return record(DelegationState.ERROR, "no_card_url"), None, "", None
         try:
             card = card_from_dict(await fetch_card(self.http, agent.card_url))
             live_digest = payload_digest(card)
         except (FetchFailed, ValueError):
-            return record(DelegationState.ERROR, "card_fetch_failed"), None, ""
+            return record(DelegationState.ERROR, "card_fetch_failed"), None, "", None
         if live_digest != agent.current_digest:
             await self._report_drift(agent, live_digest)
-            return record(DelegationState.CARD_DRIFT, "card_drift"), None, ""
+            return record(DelegationState.CARD_DRIFT, "card_drift"), None, "", None
 
         task_id = f"{run_id}:{subtask.id}:{attempt}"
         try:
@@ -222,26 +246,30 @@ class Delegator:
                     self.http,
                 )
         except DeadlineExceeded:
-            return record(DelegationState.TIMEOUT, "deadline"), None, ""
+            return record(DelegationState.TIMEOUT, "deadline"), None, "", None
         except Exception as exc:  # transport and A2A client errors end this attempt only
-            return record(DelegationState.ERROR, type(exc).__name__), None, ""
+            return record(DelegationState.ERROR, type(exc).__name__), None, "", None
 
         if result.state == "TASK_STATE_COMPLETED":
             if result.output is None:
-                return record(DelegationState.FAILED_CONTRACT, "no_artifact"), None, ""
+                return record(DelegationState.FAILED_CONTRACT, "no_artifact"), None, "", None
             try:
                 output = SKILL_IO[subtask.skill][1].model_validate(result.output)
             except ValidationError:
-                return record(DelegationState.FAILED_CONTRACT, "invalid_output"), None, ""
-            return record(DelegationState.COMPLETED, None), output.model_dump(mode="json"), ""
+                return record(DelegationState.FAILED_CONTRACT, "invalid_output"), None, "", None
+            check = spot_check(subtask.skill, payload, output, task_id)
+            if not check.passed:
+                failed = record(DelegationState.FAILED_SPOTCHECK, "spotcheck")
+                return failed, None, check.detail, False
+            return record(DelegationState.COMPLETED, None), output.model_dump(mode="json"), "", True
         state = _A2A_STATES.get(result.state)
         if state is None:
             kind = "stream_ended_" + result.state.removeprefix("TASK_STATE_").lower()
-            return record(DelegationState.ERROR, kind), None, result.error
+            return record(DelegationState.ERROR, kind), None, result.error, None
         kind = result.error_kind or (
             "interrupted" if state is DelegationState.INTERRUPTED else state.value.lower()
         )
-        return record(state, kind), None, result.error
+        return record(state, kind), None, result.error, None
 
     async def _report_drift(self, agent: AgentRecord, live_digest: str) -> None:
         evidence = f"live card digest {live_digest} != registry digest {agent.current_digest}"

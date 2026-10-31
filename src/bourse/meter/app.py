@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from opentelemetry import trace
 
 from bourse.contracts.metering import BudgetSpec, LlmUsageRecord
 from bourse.llm.base import ChatResult, Provider, Sampling
@@ -32,6 +33,7 @@ from bourse.meter.repo import MeterRepository
 from bourse.runtime.breaker import GLOBAL_BREAKER, BreakerOpen, CircuitBreaker, ProviderHTTPError
 from bourse.runtime.budget import BudgetExceeded, BudgetLedger
 from bourse.runtime.deadline import DeadlineExceeded
+from bourse.telemetry import TraceMiddleware
 
 TASK_HEADER = "x-bourse-task-id"
 SEED_HEADER = "x-bourse-seed"
@@ -71,6 +73,7 @@ def create_meter_app(
     """`providers` maps each allowlisted model to its ordered provider chain."""
     cfg = config or MeterConfig()
     app = FastAPI(title="BOURSE metering proxy", version="0.1.0")
+    app.add_middleware(TraceMiddleware, span_name="llm call")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
@@ -85,6 +88,13 @@ def create_meter_app(
         async def record(
             status: int, error_kind: str | None, result: ChatResult | None = None
         ) -> None:
+            span = trace.get_current_span()
+            span.set_attribute("agent_id", agent_id)
+            span.set_attribute("task_id", task_id or "")
+            span.set_attribute("model", result.usage.model if result else model)
+            span.set_attribute("tokens_in", result.usage.tokens_in if result else 0)
+            span.set_attribute("tokens_out", result.usage.tokens_out if result else 0)
+            span.set_attribute("outcome", error_kind or "ok")
             await repo.add_usage(
                 LlmUsageRecord(
                     agent_id=agent_id,

@@ -77,8 +77,16 @@ def services(settings: Settings) -> list[Service]:
     cli = [sys.executable, "-m", "bourse.cli"]
     meter_keys = ",".join(f"{a}:{k}" for a, k in sec["meter_keys"].items())
     existing = settings.bourse_meter_keys.get_secret_value()
+    all_keys = ",".join(filter(None, [existing, meter_keys]))
+    # MCP servers accept the same per-agent keys (X-Bourse-Agent-Key) and record tool_usage.
     out = [
-        Service(f"mcp-{n}", [*cli, "mcp", "serve", n, "--port", str(p)], p, "/mcp")
+        Service(
+            f"mcp-{n}",
+            [*cli, "mcp", "serve", n, "--port", str(p)],
+            p,
+            "/mcp",
+            {"BOURSE_METER_KEYS": all_keys},
+        )
         for n, p in SERVER_PORTS.items()
     ]
     out.append(
@@ -87,7 +95,7 @@ def services(settings: Settings) -> list[Service]:
             [*cli, "meter", "serve", "--port", str(METER_PORT)],
             METER_PORT,
             "/v1/chat/completions",
-            {"BOURSE_METER_KEYS": ",".join(filter(None, [existing, meter_keys]))},
+            {"BOURSE_METER_KEYS": all_keys},
         )
     )
     out.append(

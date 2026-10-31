@@ -67,3 +67,16 @@ class LlmUsageRecord(BaseModel):
     status: int
     error_kind: str | None
     at: datetime
+
+
+class ToolUsageRecord(BaseModel):
+    """One MCP tool call, recorded by the MCP server (not by the agent). Append-only."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str
+    task_id: str | None
+    tool: str  # "<server>.<tool>"
+    wall_ms: float = Field(ge=0)
+    ok: bool
+    at: datetime

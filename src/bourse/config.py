@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     bourse_meter_deadline_s: float = 120.0
     bourse_meter_temperature: float = 0.0
     bourse_meter_seed: int = 1234
-    bourse_meter_num_ctx: int = 8192
+    # ADR-0033: 4096 = smallest of 4096/6144/8192 >= 2 x observed max tokens per call.
+    bourse_meter_num_ctx: int = 4096
     bourse_meter_keep_alive: str = "30m"
     # Local stack wiring (bourse stack up sets these for its subprocesses).
     bourse_meter_url: str = "http://127.0.0.1:55200"
@@ -59,6 +60,18 @@ class Settings(BaseSettings):
     bourse_broker_delegation_deadline_s: float = 300.0
     bourse_broker_wall_budget_s: float = 1800.0
     bourse_broker_max_tokens_run: int = 20000
+    # Ledger and measured selection (Phase 4, ADR-0029..0031).
+    bourse_prices_file: str = "config/prices.toml"
+    bourse_select_lambda: float = 0.2
+    bourse_select_mu: float = 0.2
+    bourse_select_ewma_alpha: float = 0.3
+    bourse_select_min_trials: int = 5
+    bourse_select_explore_every: int = 4
+    bourse_select_cold_tokens: int = 2000
+    # Resident memory guard (ADR-0033).
+    bourse_resident_limit_bytes: int = 26_000_000_000
+    bourse_resident_sustain_s: float = 30.0
+    bourse_resident_interval_s: float = 5.0
 
     @property
     def dev_hosts(self) -> frozenset[str]:

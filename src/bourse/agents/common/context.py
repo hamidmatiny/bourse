@@ -14,6 +14,9 @@ from bourse.llm.router import Router
 from bourse.mcp_adapter.adapter import ToolBudget, mcp_tools_as_langchain
 from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.budget import BudgetLedger
+from bourse.telemetry import trace_headers
+
+AGENT_KEY_HEADER = "X-Bourse-Agent-Key"
 
 
 @dataclass
@@ -56,6 +59,14 @@ class TaskContext:
             self._router = Router([provider], ledger, CircuitBreaker())
         return self._router
 
+    def mcp_headers(self) -> dict[str, str]:
+        """Identify the agent and task to the MCP server; carry the trace (ADR-0029/0032)."""
+        return {
+            AGENT_KEY_HEADER: self.runtime.meter_key,
+            METER_TASK_HEADER: self.task_id,
+            **trace_headers(),
+        }
+
     async def call_tool(self, server: str, tool: str, **arguments: Any) -> Any:
         allowed = self.spec.mcp.get(server, frozenset())
         if tool not in allowed:
@@ -70,6 +81,7 @@ class TaskContext:
                 deadline_s=self.runtime.mcp_deadline_s,
                 budget=self.budget,
                 on_call=self.tool_calls.append,
+                headers=self.mcp_headers,
             )
             self._tools[server] = {t.name: t for t in built}
         return await self._tools[server][tool].ainvoke(arguments)

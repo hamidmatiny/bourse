@@ -11,12 +11,15 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCard
 from fastapi import FastAPI
 
+from bourse.telemetry import TraceMiddleware
+
 
 def build_agent_app(executor: AgentExecutor, card: AgentCard) -> FastAPI:
     handler = DefaultRequestHandler(
         agent_executor=executor, task_store=InMemoryTaskStore(), agent_card=card
     )
     app = FastAPI(title=card.name, version=card.version)
+    app.add_middleware(TraceMiddleware, span_name="agent task")
     add_a2a_routes_to_fastapi(
         app,
         agent_card_routes=create_agent_card_routes(card),

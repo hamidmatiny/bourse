@@ -59,9 +59,10 @@ flowchart LR
     MT -->|native API| O[Ollama]
     MT -.->|fallback| OR[OmniRoute]
     MT --> DB
-    B -.->|Phase 4| L[Ledger + reliability]
-    L -.-> DB
-    AG -.->|Phase 4| OT[OTel collector -> Jaeger]
+    B -->|ledger rows, spot checks| L[Ledger + reliability]
+    L --> DB
+    M -->|tool_usage| DB
+    AG -->|traceparent| OT[OTel collector -> Jaeger]
     AG -.->|planned| E[Egress guard]
 ```
 
@@ -73,8 +74,8 @@ flowchart LR
 | 1 | Card crypto (JCS + JWS) and registry | `5791f9c` | 226 unit, 4 db passed; attacks caught 8/8; honest false rejects 0/3 |
 | 2a | Skill I/O contracts, MCP servers, MCP adapter, metering proxy | `29f1f31` | 319 unit, 6 db, 6 live passed |
 | 2b | Five agents, graders, stack launcher, smoke run | `183ab27` | 367 unit, 6 db, 11 live passed; smoke 18/18 graded passed; 20,532 tokens in / 3,070 out |
-| 3 | Broker: planner, selector, card-drift-checked A2A delegation, resumable runs | Phase 3 commit | 393 unit, 10 db, 12 live passed; e2e runs succeeded 3/3, planner_used llm 3/3, fallbacks 0, subtasks graded passed 15/15; 9,293 tokens in / 1,726 out |
-| 4 | Ledger, reliability, OTel | – | planned |
+| 3 | Broker: planner, selector, card-drift-checked A2A delegation, resumable runs | `e19990a` | 393 unit, 10 db, 12 live passed; e2e runs succeeded 3/3, planner_used llm 3/3, fallbacks 0, subtasks graded passed 15/15; 9,293 tokens in / 1,726 out |
+| 4 | Measured ledger, spot-check reliability, measured selection with exploration, OTel, resident memory guard | Phase 4 commit | 446 unit, 19 db, 12 live passed; e2e --repeat 3: runs succeeded 9/9, exploration picks 2, spot-check failures 0/45, subtasks graded passed 45/45; 33,148 tokens in / 5,854 out; shadow_usd 0.009430; resident peak 25,628,315,882 |
 | 5 | Trust runtime, adversaries A4–A8, Slack approver | – | planned |
 | 6 | Bench harness, Executor pools | – | planned |
 | 7 | `--final` run, RESULTS.md | – | planned |
@@ -122,8 +123,10 @@ Reproduce the Phase 1 table: `uv run bourse attacks phase1`.
 Requirements: macOS or Linux, [uv](https://docs.astral.sh/uv/), Docker, Ollama 0.40.6 on the host
 with `gemma4:12b` and `qwen3.5:27b-q4_K_M` pulled, started with
 `OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_NUM_PARALLEL=2 OLLAMA_FLASH_ATTENTION=1
-OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=8192` (Ollama 0.40.6 ignores per-request
-`num_ctx`; ADR-0020). With both models loaded the probe measured
+OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=4096` (Ollama 0.40.6 ignores per-request
+`num_ctx`; 4096 = smallest of 4096/6144/8192 >= 2 x the observed max of 1666 tokens per call,
+ADR-0033). Runs sample `/api/ps` every 5 s and abort if the resident total stays above
+26,000,000,000 bytes for 30 s. With both models loaded the probe measured
 23,993,702,388 resident bytes (limit 26 GB, AGENTS.md rule 9). `gitleaks` is needed only for the
 secret scan.
 
@@ -140,7 +143,10 @@ uv run bourse stack register    # onboards 3 vendors, registers 5 agents
 uv run bourse smoke all         # 18 tasks; writes data/smoke/smoke-<utc>.json
 uv run bourse stack activate --all   # PENDING -> ACTIVE until the Phase 5 exam (ADR-0028)
 uv run bourse run --dataset people --request "audit this dataset for PII, units and summary stats"
-uv run bourse e2e all           # broker on 3 fixtures; writes data/e2e/e2e-<utc>.json
+uv run bourse e2e all --repeat 3   # broker on 3 fixtures x 3; writes data/e2e/e2e-<utc>.json
+uv run bourse scores            # Wilson LB per agent/skill from spot-checked ledger rows
+uv run bourse usage maxcall     # tokens per call per model; num_ctx rule (ADR-0033)
+uv run bourse ledger export     # data/exports/ledger-<utc>.parquet (pandera-validated)
 uv run bourse stack down
 ```
 
@@ -174,7 +180,7 @@ All services bind to 127.0.0.1:
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): hard rules and phase plan.
-- [docs/adr/](docs/adr/README.md): 28 architecture decision records.
+- [docs/adr/](docs/adr/README.md): 33 architecture decision records.
 
 ## License
 

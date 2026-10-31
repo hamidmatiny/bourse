@@ -16,6 +16,7 @@ from bourse.agents.reporter.agent import ReporterExecutor
 from bourse.config import Settings
 from bourse.contracts.skills import SkillId
 from bourse.mcp_servers.common import SERVER_PORTS
+from bourse.telemetry import setup_tracing, traced_async_client
 
 AGENT_NAMES = ("profiler", "pii_precise", "pii_fast", "normalizer", "reporter")
 TABLE_TOOLS = frozenset({"profile_columns", "column_stats", "sample_rows"})
@@ -121,7 +122,8 @@ def serve_agent(name: str, settings: Settings, meter_url: str, meter_key: str) -
         from bourse.agents.pii_precise import isolation
 
         isolation.apply()
-    client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0))
+    setup_tracing(f"bourse-agent-{name}", settings.otel_exporter_otlp_endpoint)
+    client = traced_async_client(timeout=httpx.Timeout(None, connect=5.0))
     runtime = AgentRuntime(
         meter_url=meter_url, meter_key=meter_key, http_client=client, mcp_servers=mcp_urls()
     )

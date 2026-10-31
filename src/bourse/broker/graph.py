@@ -25,16 +25,19 @@ from bourse.contracts.broker import (
     IntakeReport,
     RunRecord,
     RunStatus,
+    SelectionRecord,
     SubtaskResult,
     SubtaskStatus,
 )
 from bourse.contracts.skills import SkillId
 from bourse.contracts.tasks import IntakeRequest, Subtask, TaskDAG
+from bourse.ledger.repo import LedgerRepository
 from bourse.llm.submit_tool import ChatClient
 from bourse.meter.repo import MeterRepository
 from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.executor import Executor
 from bourse.runtime.watchdog import Watchdog
+from bourse.telemetry import current_trace_id, tracer
 
 HEARTBEAT_SLACK_S = 60.0
 
@@ -100,6 +103,7 @@ class Broker:
     wall_budget_s: float
     heartbeat_timeout_s: float
     echo: Callable[[str], None] = field(default=lambda _line: None)
+    ledger: LedgerRepository | None = None  # selection_decisions are persisted when set
     _watchdog: Watchdog | None = None
 
     def beat(self) -> None:
@@ -117,7 +121,10 @@ class Broker:
             # the stored plan instead of asking the LLM again.
             result = PlanResult(existing.plan, existing.planner_used)
         else:
-            result = await make_plan(run_id, request, self.planner_llm(run_id))
+            with tracer().start_as_current_span("plan") as span:
+                span.set_attribute("run_id", run_id)
+                result = await make_plan(run_id, request, self.planner_llm(run_id))
+                span.set_attribute("planner_used", result.planner_used)
             await self.runs.create_run(
                 RunRecord(
                     run_id=run_id,
@@ -215,9 +222,31 @@ class Broker:
             if output is not None:
                 upstream[done[aid].skill] = output
         payload = build_input(sub.skill, request.dataset, upstream)
-        agents = {a.agent_id: a for a in await self.registry.active_agents(sub.skill)}
-        decision = self.policy.choose(sub, list(agents.values()))
-        return await self.delegator.run_subtask(run_id, sub, decision, agents, payload)
+        with tracer().start_as_current_span("subtask") as span:
+            span.set_attribute("run_id", run_id)
+            span.set_attribute("subtask_id", sub.id)
+            span.set_attribute("skill", sub.skill.value)
+            agents = {a.agent_id: a for a in await self.registry.active_agents(sub.skill)}
+            await self.policy.refresh(sub.skill, list(agents.values()))
+            decision = self.policy.choose(sub, list(agents.values()))
+            span.set_attribute("selection_reason", decision.reason)
+            if self.ledger is not None:
+                await self.ledger.add_selection(
+                    SelectionRecord(
+                        run_id=run_id,
+                        subtask_id=sub.id,
+                        skill=sub.skill,
+                        candidates=decision.candidates,
+                        chosen=decision.chosen,
+                        reason=decision.reason,
+                        at=datetime.now(UTC),
+                    )
+                )
+            result = await self.delegator.run_subtask(run_id, sub, decision, agents, payload)
+            span.set_attribute("outcome", result.status.value)
+            if result.agent_id:
+                span.set_attribute("agent_id", result.agent_id)
+            return result
 
     async def _assemble(self, state: RunState) -> RunState:
         dag = TaskDAG.model_validate(state["plan"])
@@ -293,6 +322,7 @@ class Broker:
         graph = self.graph()
         token = anyio.lowlevel.current_token()
         kill_reason: list[str] = []
+        trace_id: str | None = None
         with anyio.CancelScope() as scope:
 
             def on_kill(reason: str) -> None:
@@ -300,7 +330,9 @@ class Broker:
                 anyio.from_thread.run_sync(scope.cancel, token=token)
 
             self._watchdog = Watchdog(self.heartbeat_timeout_s, self.wall_budget_s, on_kill)
-            with self._watchdog:
+            with self._watchdog, tracer().start_as_current_span("run") as span:
+                span.set_attribute("run_id", run_id)
+                trace_id = current_trace_id()
                 await graph.ainvoke(initial, _config(run_id))
         self._watchdog = None
         snapshot = await graph.aget_state(_config(run_id))
@@ -309,9 +341,11 @@ class Broker:
             await self._finish(run_id, RunStatus.ABORTED)
             state = {**state, "status": RunStatus.ABORTED.value}
             state["abort_reason"] = f"watchdog: {kill_reason[0] if kill_reason else 'killed'}"
-        return await self.report(run_id, state)
+        return await self.report(run_id, state, trace_id)
 
-    async def report(self, run_id: str, state: RunState) -> IntakeReport:
+    async def report(
+        self, run_id: str, state: RunState, trace_id: str | None = None
+    ) -> IntakeReport:
         dag = TaskDAG.model_validate(state["plan"])
         results = [SubtaskResult.model_validate(v) for v in state.get("results", {}).values()]
         order = {s.id: i for i, s in enumerate(dag.subtasks)}
@@ -334,6 +368,7 @@ class Broker:
             tokens_out=sum(u.tokens_out for u in usage),
             wall_ms=(run.wall_ms or 0.0) if run is not None else 0.0,
             abort_reason=state.get("abort_reason"),
+            trace_id=trace_id,
         )
 
 

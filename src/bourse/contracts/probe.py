@@ -14,3 +14,6 @@ class ProbeReport(BaseModel):
     resident_bytes: int = Field(ge=0)
     resident_ok: bool
     latency_ms: float | None
+    # ADR-0033: host settings the probe could observe; "unverified" when Ollama's API does not
+    # expose them. context_length per loaded model comes from /api/ps.
+    server_settings: dict[str, str] = Field(default_factory=dict)
