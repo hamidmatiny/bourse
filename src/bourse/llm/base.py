@@ -12,6 +12,17 @@ from bourse.contracts.metering import Usage
 FinishReason = Literal["stop", "length", "tool_calls"]
 
 
+class Sampling(BaseModel):
+    """Sampling set by the metering proxy, never by agents (ADR-0020)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    temperature: float = 0.0
+    seed: int = 1234
+    num_ctx: int = Field(default=8192, gt=0)
+    keep_alive: str = "30m"
+
+
 class ToolSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

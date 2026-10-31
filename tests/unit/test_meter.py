@@ -1,5 +1,6 @@
 import asyncio
 import json
+import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -7,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from bourse.llm.base import Provider
+from bourse.llm.base import Provider, Sampling
 from bourse.llm.ollama import OllamaProvider
 from bourse.llm.omniroute import OmniRouteProvider
 from bourse.meter.app import MeterConfig, create_meter_app
@@ -18,7 +19,8 @@ from tests.unit.fakes import OLLAMA, OLLAMA_CHAT, OMNI, OMNI_CHAT, ollama_reply,
 
 MODEL = "qwen3.5:27b-q4_K_M"
 OTHER_MODEL = "gemma4:12b"
-KEY = "agent-key-0123456789abcdef"
+# Generated per run: no key-shaped literals in the repo (gitleaks generic-api-key).
+KEY = secrets.token_hex(16)
 HEADERS = {"Authorization": f"Bearer {KEY}", "X-Bourse-Task-Id": "task-1"}
 WEATHER_TOOL = {
     "type": "function",
@@ -209,7 +211,7 @@ async def test_response_format_rejected(harness: Harness, mock: respx.Router, fm
 
 @pytest.mark.parametrize(
     "headers",
-    [{}, {"Authorization": "Bearer wrong-key-0123456789"}, {"Authorization": KEY}],
+    [{}, {"Authorization": f"Bearer {secrets.token_hex(16)}"}, {"Authorization": KEY}],
     ids=["missing", "wrong", "no-bearer"],
 )
 async def test_bad_key_is_401(
@@ -287,10 +289,37 @@ async def test_fallback_to_omniroute_then_502(mock: respx.Router) -> None:
 
 
 def test_parse_keys() -> None:
-    assert parse_keys("a:0123456789abcdef, b:fedcba9876543210") == {
-        "0123456789abcdef": "a",
-        "fedcba9876543210": "b",
-    }
-    for bad in ("a:short", "nocolon", "a:0123456789abcdef,b:0123456789abcdef"):
+    k1, k2 = secrets.token_hex(8), secrets.token_hex(8)
+    assert parse_keys(f"a:{k1}, b:{k2}") == {k1: "a", k2: "b"}
+    for bad in ("a:short", "nocolon", f"a:{k1},b:{k1}"):
         with pytest.raises(ValueError):
             parse_keys(bad)
+
+
+async def test_proxy_sets_sampling_and_ignores_client_values(
+    harness: Harness, mock: respx.Router
+) -> None:
+    route = mock.post(OLLAMA_CHAT).mock(return_value=ollama_reply("x"))
+    resp = await _post(harness, _body(temperature=1.7, seed=99, top_p=0.1))
+    assert resp.status_code == 200
+    upstream = request_json(route.calls.last.request)
+    assert upstream["options"]["temperature"] == 0.0
+    assert upstream["options"]["seed"] == 1234
+    assert upstream["options"]["num_ctx"] == 8192
+    assert "top_p" not in upstream["options"]
+    assert upstream["keep_alive"] == "30m"
+
+
+async def test_seed_header_and_configured_sampling(mock: respx.Router) -> None:
+    route = mock.post(OLLAMA_CHAT).mock(return_value=ollama_reply("x"))
+    sampling = Sampling(temperature=0.3, seed=7, num_ctx=4096, keep_alive="5m")
+    h = Harness(
+        httpx.AsyncClient(transport=httpx.MockTransport(mock.async_handler)),
+        config=MeterConfig(max_tokens_per_call=64, deadline_s=5.0, sampling=sampling),
+    )
+    resp = await _post(h, _body(), headers={**HEADERS, "X-Bourse-Seed": "42"})
+    assert resp.status_code == 200
+    options = request_json(route.calls.last.request)["options"]
+    assert (options["temperature"], options["seed"], options["num_ctx"]) == (0.3, 42, 4096)
+    bad = await _post(h, _body(), headers={**HEADERS, "X-Bourse-Seed": "abc"})
+    assert bad.status_code == 400

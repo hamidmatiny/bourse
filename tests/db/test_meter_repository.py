@@ -45,6 +45,8 @@ async def repo(migrated: None) -> AsyncIterator[SqlMeterRepository]:
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE llm_usage RESTART IDENTITY"))
     yield SqlMeterRepository(engine)
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE llm_usage RESTART IDENTITY"))
     await engine.dispose()
 
 

@@ -26,10 +26,11 @@ every metric as n/N on a frozen test split.
 7. Hard limits from day one: per-call deadline that is a real wall-clock deadline around the whole
    call (anyio.fail_after / asyncio.timeout), NOT an httpx read timeout; max-token cap on every call;
    wall budget per run; watchdog that kills a run whose heartbeat goes stale.
-8. Ollama 0.40.6 returns 501 for every structured-output `format` path. Structured output uses the
-   SUBMIT-TOOL pattern: the model must call a single tool `submit` whose JSON args are validated by a
-   Pydantic model; on validation error, retry with the error message, max N attempts, then a typed
-   failure. A startup capability probe records what the server supports.
+8. Ollama 0.40.6: gemma4:12b returns 501 on format paths; qwen3.5:27b accepts format=json (200) but
+   it does not enforce our schema. Structured output uses the SUBMIT-TOOL pattern for ALL models: the
+   model must call a single tool `submit` whose JSON args are validated by a Pydantic model; on
+   validation error, retry with the error message, max N attempts, then a typed failure. A startup
+   capability probe records what the server supports (ADR-0019).
 9. Local Qwen/Gemma calls always send `think: false`. At most 2 models resident
    (OLLAMA_MAX_LOADED_MODELS=2), combined resident size < 26 GB (probe verifies via /api/ps).
 10. Safety comes from deterministic checks only. No LLM participates in any trust, quarantine, or

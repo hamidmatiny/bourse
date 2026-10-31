@@ -1,6 +1,7 @@
 """Metering proxy against the host Ollama. Run with `uv run pytest -m live`."""
 
 import json
+import secrets
 
 import httpx
 import pytest
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.live
 
 SETTINGS = get_settings()
 MODELS = [SETTINGS.bourse_model_large, SETTINGS.bourse_model_small]
-KEY = "live-test-key-0123456789"
+KEY = secrets.token_hex(16)  # generated per run; no key-shaped literal in the repo
 ADD_TOOL = {
     "type": "function",
     "function": {

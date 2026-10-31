@@ -1,7 +1,8 @@
 """OpenAI-compatible /v1/chat/completions provider (OmniRoute; also reused by paid.py)."""
 
+import copy
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
@@ -12,6 +13,7 @@ from bourse.llm.base import (
     ChatMessage,
     ChatResult,
     FinishReason,
+    Sampling,
     ToolCall,
     ToolSpec,
     openai_message,
@@ -31,12 +33,22 @@ class OpenAICompatProvider:
         api_key: str,
         client: httpx.AsyncClient | None = None,
         provider_name: str = "omniroute",
+        *,
+        sampling: Sampling | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT)
         self._name = provider_name
+        self._sampling = sampling
+        self._headers = dict(headers or {})
+
+    def with_sampling(self, sampling: Sampling) -> "OpenAICompatProvider":
+        clone = copy.copy(self)
+        clone._sampling = sampling
+        return clone
 
     @property
     def name(self) -> str:
@@ -64,7 +76,10 @@ class OpenAICompatProvider:
         }
         if tools:
             body["tools"] = tool_payload(tools)
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        if self._sampling is not None:
+            body["temperature"] = self._sampling.temperature
+            body["seed"] = self._sampling.seed
+        headers = {**self._headers, "Authorization": f"Bearer {self._api_key}"}
         started = time.monotonic()
         async with deadline(deadline_s):
             resp = await self._client.post(

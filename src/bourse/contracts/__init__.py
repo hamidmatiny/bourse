@@ -1,6 +1,7 @@
 """Typed contracts: the only interface between BOURSE components (ADR-0004)."""
 
 from bourse.contracts.approval import ApprovalDecision, ApprovalRequest, ApprovalTrigger
+from bourse.contracts.grading import Grade
 from bourse.contracts.metering import (
     BudgetSpec,
     LedgerEntry,
@@ -35,6 +36,7 @@ __all__ = [
     "ApprovalTrigger",
     "BudgetSpec",
     "CardRevision",
+    "Grade",
     "IntakeRequest",
     "LedgerEntry",
     "LlmUsageRecord",

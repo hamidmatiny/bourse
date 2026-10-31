@@ -28,12 +28,18 @@ registry_app = typer.Typer(no_args_is_help=True, help="Agent registry service.")
 attacks_app = typer.Typer(no_args_is_help=True, help="Deterministic attack suites.")
 mcp_app = typer.Typer(no_args_is_help=True, help="Pure MCP tool servers.")
 meter_app = typer.Typer(no_args_is_help=True, help="Metering LLM proxy.")
+agent_app = typer.Typer(no_args_is_help=True, help="A2A agents.")
+stack_app = typer.Typer(no_args_is_help=True, help="Local stack of all services.")
+smoke_app = typer.Typer(no_args_is_help=True, help="Smoke runs against the local stack.")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
 app.add_typer(attacks_app, name="attacks")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(meter_app, name="meter")
+app.add_typer(agent_app, name="agent")
+app.add_typer(stack_app, name="stack")
+app.add_typer(smoke_app, name="smoke")
 
 
 def _pkg_version(name: str) -> str:
@@ -54,9 +60,9 @@ def doctor() -> None:
     typer.echo(f"MCP_SPEC_VERSION {MCP_SPEC_VERSION}")
 
 
-async def _probe(base_url: str, model: str, out_dir: Path) -> int:
+async def _probe(base_url: str, model: str, out_dir: Path, num_ctx: int) -> int:
     async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-        report, written = await run_probe(client, base_url, model, out_dir)
+        report, written = await run_probe(client, base_url, model, out_dir, num_ctx=num_ctx)
     typer.echo(report.model_dump_json(indent=2))
     typer.echo(f"written: {written}")
     failures: list[str] = []
@@ -81,7 +87,9 @@ def probe(
     """Probe the local Ollama server and write data/probe/probe-<utc>.json."""
     settings = get_settings()
     chosen = model or settings.bourse_model_small
-    code = asyncio.run(_probe(settings.ollama_base_url, chosen, Path(out_dir)))
+    code = asyncio.run(
+        _probe(settings.ollama_base_url, chosen, Path(out_dir), settings.bourse_meter_num_ctx)
+    )
     raise typer.Exit(code)
 
 
@@ -155,7 +163,7 @@ def card_verify(
 @registry_app.command("serve")
 def registry_serve(
     host: Annotated[str, typer.Option()] = "127.0.0.1",
-    port: Annotated[int, typer.Option()] = 8700,
+    port: Annotated[int, typer.Option()] = 55300,
 ) -> None:
     """Serve the registry API against Postgres (BOURSE_DATABASE_URL)."""
     import uvicorn
@@ -208,7 +216,7 @@ def meter_serve(
     import uvicorn
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from bourse.llm.base import Provider
+    from bourse.llm.base import Provider, Sampling
     from bourse.llm.ollama import OllamaProvider
     from bourse.llm.omniroute import OmniRouteProvider
     from bourse.meter.app import MeterConfig, create_meter_app
@@ -240,9 +248,122 @@ def meter_serve(
         config=MeterConfig(
             max_tokens_per_call=settings.bourse_meter_max_tokens_per_call,
             deadline_s=settings.bourse_meter_deadline_s,
+            sampling=Sampling(
+                temperature=settings.bourse_meter_temperature,
+                seed=settings.bourse_meter_seed,
+                num_ctx=settings.bourse_meter_num_ctx,
+                keep_alive=settings.bourse_meter_keep_alive,
+            ),
         ),
     )
     uvicorn.run(app_, host="127.0.0.1", port=port)
+
+
+@agent_app.command("serve")
+def agent_serve(name: Annotated[str, typer.Argument(help="Agent name")]) -> None:
+    """Serve one agent (A2A JSON-RPC + signed card) on its port, 127.0.0.1 only."""
+    from bourse.agents.catalog import AGENT_NAMES, serve_agent
+
+    if name not in AGENT_NAMES:
+        raise typer.BadParameter(f"agent must be one of {', '.join(AGENT_NAMES)}")
+    settings = get_settings()
+    key = settings.bourse_agent_key.get_secret_value()
+    if not key:
+        raise typer.BadParameter("BOURSE_AGENT_KEY is not set (bourse stack up sets it)")
+    serve_agent(name, settings, settings.bourse_meter_url, key)
+
+
+@stack_app.command("up")
+def stack_up() -> None:
+    """Start MCP servers, meter, registry and agents; wait for health; print a table."""
+    from bourse.stack.launcher import services, start, table, wait_healthy
+
+    svcs = services(get_settings())
+    pids = {s.name: start(s) for s in svcs}
+    health = wait_healthy(svcs)
+    rows = [["name", "port", "pid", "healthy"]]
+    rows += [[s.name, str(s.port), str(pids[s.name]), str(health[s.name])] for s in svcs]
+    typer.echo(table(rows))
+    up = sum(health.values())
+    typer.echo(f"healthy {up}/{len(svcs)} (logs: data/logs/<name>.log)")
+    raise typer.Exit(0 if up == len(svcs) else 1)
+
+
+@stack_app.command("down")
+def stack_down() -> None:
+    """Stop every service started by `bourse stack up`."""
+    from bourse.stack.launcher import services, stop
+
+    svcs = services(get_settings())
+    stopped = sum(stop(s.name) for s in svcs)
+    typer.echo(f"stopped {stopped}/{len(svcs)}")
+
+
+@stack_app.command("status")
+def stack_status() -> None:
+    """Show pid and health of every service."""
+    from bourse.stack.launcher import healthy, read_pid, services, table
+
+    svcs = services(get_settings())
+    rows = [["name", "port", "pid", "healthy"]]
+    ok = 0
+    for s in svcs:
+        pid = read_pid(s.name)
+        h = pid is not None and healthy(s)
+        ok += h
+        rows.append([s.name, str(s.port), str(pid or "-"), str(h)])
+    typer.echo(table(rows))
+    typer.echo(f"healthy {ok}/{len(svcs)}")
+    raise typer.Exit(0 if ok == len(svcs) else 1)
+
+
+@stack_app.command("register")
+def stack_register() -> None:
+    """Onboard vendor-a/b/c with pinned JWKS and register the 5 agents by card_url."""
+    from bourse.stack.launcher import table
+    from bourse.stack.register import register_all
+
+    rows, accepted, total = register_all(get_settings())
+    typer.echo(table(rows))
+    typer.echo(f"registered {accepted}/{total} ACCEPTED")
+    raise typer.Exit(0 if accepted == total else 1)
+
+
+@smoke_app.command("all")
+def smoke_all_cmd(
+    datasets: Annotated[str, typer.Option(help="Comma-separated dataset names")] = (
+        "people,measurements,orders"
+    ),
+    agents: Annotated[str | None, typer.Option(help="Comma-separated agent names")] = None,
+) -> None:
+    """Every agent x skill x dataset through A2A; grade; read metered usage by task_id."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.meter.repo_sql import SqlMeterRepository
+    from bourse.stack.launcher import table
+    from bourse.stack.smoke import result_table, smoke_all, summary_lines
+
+    settings = get_settings()
+
+    async def run() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            rows, out = await smoke_all(
+                settings,
+                SqlMeterRepository(engine),
+                [d.strip() for d in datasets.split(",") if d.strip()],
+                echo=lambda line: typer.echo(line),
+                agents=[a.strip() for a in agents.split(",")] if agents else None,
+            )
+        finally:
+            await engine.dispose()
+        typer.echo(table(result_table(rows)))
+        for line in summary_lines(rows):
+            typer.echo(line)
+        typer.echo(f"written: {out}")
+        return 0 if all(r.state == "COMPLETED" for r in rows) else 1
+
+    raise typer.Exit(asyncio.run(run()))
 
 
 if __name__ == "__main__":

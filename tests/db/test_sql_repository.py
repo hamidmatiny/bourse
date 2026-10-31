@@ -9,7 +9,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from bourse.config import get_settings
 from bourse.contracts.approval import ApprovalDecision
@@ -48,12 +48,19 @@ def migrated() -> Iterator[None]:
     yield
 
 
-@pytest.fixture
-async def repo(migrated: None) -> AsyncIterator[SqlRepository]:
-    engine = create_async_engine(URL)
+async def _truncate(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {', '.join(sorted(TABLES))} RESTART IDENTITY CASCADE"))
+
+
+@pytest.fixture
+async def repo(migrated: None) -> AsyncIterator[SqlRepository]:
+    # Truncate after as well: test vendors (e.g. vendor-a.local with a throwaway key) must not
+    # stay pinned in the shared dev database that `bourse stack register` uses.
+    engine = create_async_engine(URL)
+    await _truncate(engine)
     yield SqlRepository(engine)
+    await _truncate(engine)
     await engine.dispose()
 
 

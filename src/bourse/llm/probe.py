@@ -40,6 +40,7 @@ async def run_probe(
     model: str,
     out_dir: Path | None = None,
     deadline_s: float = 120.0,
+    num_ctx: int = 8192,
 ) -> tuple[ProbeReport, Path | None]:
     base = base_url.rstrip("/")
 
@@ -64,7 +65,7 @@ async def run_probe(
                     "format": "json",
                     "stream": False,
                     "think": False,
-                    "options": {"num_predict": 16},
+                    "options": {"num_predict": 16, "num_ctx": num_ctx},
                 },
             )
         format_status = fmt_resp.status_code
@@ -94,7 +95,12 @@ async def run_probe(
                     "tools": [_PROBE_TOOL],
                     "stream": False,
                     "think": False,
-                    "options": {"num_predict": 128, "temperature": 0, "seed": 0},
+                    "options": {
+                        "num_predict": 128,
+                        "temperature": 0,
+                        "seed": 0,
+                        "num_ctx": num_ctx,
+                    },
                 },
             )
         latency_ms = (time.monotonic() - started) * 1000

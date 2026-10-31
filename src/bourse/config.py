@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     bourse_meter_keys: SecretStr = SecretStr("")
     bourse_meter_max_tokens_per_call: int = 2048
     bourse_meter_deadline_s: float = 120.0
+    bourse_meter_temperature: float = 0.0
+    bourse_meter_seed: int = 1234
+    bourse_meter_num_ctx: int = 8192
+    bourse_meter_keep_alive: str = "30m"
+    # Local stack wiring (bourse stack up sets these for its subprocesses).
+    bourse_meter_url: str = "http://127.0.0.1:55200"
+    bourse_registry_url: str = "http://127.0.0.1:55300"
+    bourse_agent_key: SecretStr = SecretStr("")
 
     @property
     def dev_hosts(self) -> frozenset[str]:

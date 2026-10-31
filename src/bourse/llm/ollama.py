@@ -11,6 +11,7 @@ from bourse.llm.base import (
     ChatMessage,
     ChatResult,
     FinishReason,
+    Sampling,
     ToolCall,
     ToolSpec,
     ollama_message,
@@ -30,10 +31,15 @@ class OllamaProvider:
         base_url: str,
         model: str,
         client: httpx.AsyncClient | None = None,
+        sampling: Sampling | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._client = client or httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT)
+        self._sampling = sampling
+
+    def with_sampling(self, sampling: Sampling) -> "OllamaProvider":
+        return OllamaProvider(self._base_url, self._model, self._client, sampling)
 
     @property
     def name(self) -> str:
@@ -57,6 +63,13 @@ class OllamaProvider:
             "think": False,
             "options": {"num_predict": max_tokens},
         }
+        if self._sampling is not None:
+            body["options"].update(
+                temperature=self._sampling.temperature,
+                seed=self._sampling.seed,
+                num_ctx=self._sampling.num_ctx,
+            )
+            body["keep_alive"] = self._sampling.keep_alive
         if tools:
             body["tools"] = tool_payload(tools)
         return body

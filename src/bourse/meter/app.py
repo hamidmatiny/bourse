@@ -8,7 +8,7 @@ circuit breaker, and a wall-clock deadline. Usage rows carry upstream-measured t
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
@@ -16,7 +16,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from bourse.contracts.metering import BudgetSpec, LlmUsageRecord
-from bourse.llm.base import ChatResult, Provider
+from bourse.llm.base import ChatResult, Provider, Sampling
+from bourse.llm.ollama import OllamaProvider
+from bourse.llm.omniroute import OpenAICompatProvider
 from bourse.llm.router import AllProvidersFailed, Router
 from bourse.meter.keys import agent_for
 from bourse.meter.openai_wire import (
@@ -32,6 +34,7 @@ from bourse.runtime.budget import BudgetExceeded, BudgetLedger
 from bourse.runtime.deadline import DeadlineExceeded
 
 TASK_HEADER = "x-bourse-task-id"
+SEED_HEADER = "x-bourse-seed"
 METER_PORT = 55200
 
 
@@ -41,6 +44,15 @@ class MeterConfig:
     deadline_s: float = 120.0
     # Per-request ledger; run-level per-agent budgets arrive with the ledger in Phase 4.
     max_tokens_run: int = 10**12
+    # Sampling is set here, never by clients (ADR-0020). A request may pick the seed with
+    # X-Bourse-Seed; temperature/top_p/seed fields in the request body are ignored.
+    sampling: Sampling = field(default_factory=Sampling)
+
+
+def with_sampling(provider: Provider, sampling: Sampling) -> Provider:
+    if isinstance(provider, OllamaProvider | OpenAICompatProvider):
+        return provider.with_sampling(sampling)
+    return provider
 
 
 def _now() -> datetime:
@@ -105,12 +117,19 @@ def create_meter_app(
         if parsed.model not in providers:
             return await fail(400, "model_not_allowed", f"model {parsed.model!r} is not allowed")
 
+        sampling = cfg.sampling
+        raw_seed = request.headers.get(SEED_HEADER)
+        if raw_seed is not None:
+            if not raw_seed.lstrip("-").isdigit():
+                return await fail(400, "bad_request", "X-Bourse-Seed must be an integer")
+            sampling = sampling.model_copy(update={"seed": int(raw_seed)})
+        chain = [with_sampling(p, sampling) for p in providers[parsed.model]]
         spec = BudgetSpec(
             max_tokens_per_call=cfg.max_tokens_per_call,
             max_tokens_run=cfg.max_tokens_run,
             wall_budget_s=cfg.deadline_s,
         )
-        router = Router(providers[parsed.model], BudgetLedger(spec, run_id=agent_id), breaker)
+        router = Router(chain, BudgetLedger(spec, run_id=agent_id), breaker)
         try:
             result = await router.chat(
                 parsed.messages,

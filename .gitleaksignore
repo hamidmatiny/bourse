@@ -1,0 +1,6 @@
+# Proven false positive, AGENTS.md rule 13. Commit 29f1f31 added a fixed bearer key for an
+# in-process test proxy (tests/live/test_meter_live.py:20). The key only authenticated against an
+# ASGI app created inside that test, was never configured anywhere else, and was replaced by a
+# per-run secrets.token_hex(16) in the next commit. Ignoring this one fingerprint keeps
+# full-history scans (`gitleaks detect`) usable; the rule stays active for every other line.
+29f1f310ea7e3a393f52d518abb01cfdfb0e442e:tests/live/test_meter_live.py:generic-api-key:20
