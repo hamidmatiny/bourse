@@ -31,6 +31,8 @@ meter_app = typer.Typer(no_args_is_help=True, help="Metering LLM proxy.")
 agent_app = typer.Typer(no_args_is_help=True, help="A2A agents.")
 stack_app = typer.Typer(no_args_is_help=True, help="Local stack of all services.")
 smoke_app = typer.Typer(no_args_is_help=True, help="Smoke runs against the local stack.")
+runs_app = typer.Typer(no_args_is_help=True, help="Broker run records.")
+e2e_app = typer.Typer(no_args_is_help=True, help="Broker end-to-end runs on fixtures.")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
@@ -40,6 +42,8 @@ app.add_typer(meter_app, name="meter")
 app.add_typer(agent_app, name="agent")
 app.add_typer(stack_app, name="stack")
 app.add_typer(smoke_app, name="smoke")
+app.add_typer(runs_app, name="runs")
+app.add_typer(e2e_app, name="e2e")
 
 
 def _pkg_version(name: str) -> str:
@@ -329,6 +333,23 @@ def stack_register() -> None:
     raise typer.Exit(0 if accepted == total else 1)
 
 
+@stack_app.command("activate")
+def stack_activate(
+    all_agents: Annotated[bool, typer.Option("--all", help="Activate every PENDING agent")] = False,
+) -> None:
+    """Admin PENDING -> ACTIVE before the admission exam exists (ADR-0028)."""
+    from bourse.stack.launcher import table
+    from bourse.stack.register import activate_all
+
+    if not all_agents:
+        typer.echo("pass --all (per-agent activation is not offered)", err=True)
+        raise typer.Exit(2)
+    rows, activated, total = activate_all(get_settings())
+    typer.echo(table(rows))
+    typer.echo(f"activated {activated}/{total}")
+    raise typer.Exit(0 if activated == total else 1)
+
+
 @smoke_app.command("all")
 def smoke_all_cmd(
     datasets: Annotated[str, typer.Option(help="Comma-separated dataset names")] = (
@@ -362,6 +383,137 @@ def smoke_all_cmd(
             typer.echo(line)
         typer.echo(f"written: {out}")
         return 0 if all(r.state == "COMPLETED" for r in rows) else 1
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+@app.command("run")
+def run_cmd(
+    dataset: Annotated[str, typer.Option(help="Fixture dataset name")],
+    request: Annotated[str, typer.Option(help="Request text (<= 1000 chars)")],
+) -> None:
+    """One broker run: plan, select, delegate over A2A; print a graded subtask table."""
+    from bourse.broker.runner import (
+        broker_from_settings,
+        intake,
+        load_fixture,
+        subtask_rows,
+        subtask_table,
+    )
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def run() -> int:
+        csv_text, truth = load_fixture(dataset)
+        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as broker:
+            typer.echo(f"dataset {dataset}")
+            report = await broker.start(intake(settings, csv_text, request))
+            rows = await subtask_rows(broker, report, truth)
+        typer.echo(table(subtask_table(rows)))
+        typer.echo(f"run {report.run_id} {report.status.value} planner={report.planner_used}")
+        if report.abort_reason:
+            typer.echo(f"abort_reason {report.abort_reason}")
+        typer.echo(f"graded passed {sum(r.passed for r in rows)}/{len(rows)}")
+        typer.echo(f"tokens in {report.tokens_in} out {report.tokens_out}")
+        typer.echo(f"wall_s {report.wall_ms / 1000:.1f}")
+        return 0 if report.status.value == "SUCCEEDED" else 1
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+@runs_app.command("show")
+def runs_show(run_id: Annotated[str, typer.Argument(help="Run id")]) -> None:
+    """Print a stored run and its delegation rows."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.broker.repo_sql import SqlRunRepository
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def show() -> int:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            repo = SqlRunRepository(engine)
+            run = await repo.get_run(run_id)
+            if run is None:
+                typer.echo(f"unknown run {run_id}", err=True)
+                return 1
+            delegations = await repo.list_delegations(run_id)
+        finally:
+            await engine.dispose()
+        typer.echo(
+            json.dumps(run.model_dump(mode="json", exclude={"plan"}), indent=2, sort_keys=True)
+        )
+        rows = [["subtask", "skill", "agent", "attempt", "state", "error_kind", "wall_ms"]]
+        for d in delegations:
+            rows.append(
+                [
+                    d.subtask_id,
+                    d.skill.value,
+                    d.agent_id,
+                    str(d.attempt),
+                    d.state.value,
+                    d.error_kind or "-",
+                    f"{d.wall_ms:.0f}",
+                ]
+            )
+        typer.echo(table(rows))
+        return 0
+
+    raise typer.Exit(asyncio.run(show()))
+
+
+@runs_app.command("resume")
+def runs_resume(run_id: Annotated[str, typer.Argument(help="Run id")]) -> None:
+    """Continue a killed run from its last checkpoint; completed levels are not re-delegated."""
+    from bourse.broker.runner import broker_from_settings
+
+    settings = get_settings()
+
+    async def resume() -> int:
+        async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as broker:
+            report = await broker.resume(run_id)
+        typer.echo(f"run {report.run_id} {report.status.value}")
+        return 0 if report.status.value == "SUCCEEDED" else 1
+
+    raise typer.Exit(asyncio.run(resume()))
+
+
+@e2e_app.command("all")
+def e2e_all_cmd(
+    datasets: Annotated[str, typer.Option(help="Comma-separated dataset names")] = (
+        "people,measurements,orders"
+    ),
+) -> None:
+    """Broker run per fixture with progress + ETA; writes data/e2e/e2e-<utc>.json."""
+    from bourse.broker.runner import e2e_all, e2e_summary
+    from bourse.stack.launcher import table
+
+    settings = get_settings()
+
+    async def run() -> int:
+        names = tuple(d.strip() for d in datasets.split(",") if d.strip())
+        rows, out = await e2e_all(settings, names, echo=lambda line: typer.echo(line))
+        header = ["dataset", "run_id", "status", "planner", "graded", "fallbacks", "tokens"]
+        body = [
+            [
+                r.dataset,
+                r.run_id,
+                r.status,
+                r.planner_used,
+                f"{r.subtasks_passed}/{r.subtasks_total}",
+                str(r.fallbacks),
+                f"{r.tokens_in}/{r.tokens_out}",
+            ]
+            for r in rows
+        ]
+        typer.echo(table([header, *body]))
+        for line in e2e_summary(rows):
+            typer.echo(line)
+        typer.echo(f"written: {out}")
+        return 0 if all(r.status == "SUCCEEDED" for r in rows) else 1
 
     raise typer.Exit(asyncio.run(run()))
 

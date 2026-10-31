@@ -13,7 +13,8 @@ import anyio
 import httpx
 from a2a.client import ClientConfig, create_client
 from a2a.helpers.proto_helpers import get_data_parts, new_data_part
-from a2a.types import Message, Role, SendMessageRequest, TaskState
+from a2a.types import AgentCard, Message, Role, SendMessageRequest, TaskState
+from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel
 
 from bourse.agents.catalog import specs_from_settings
@@ -42,10 +43,11 @@ class CallResult:
     output: dict[str, Any] | None
     error: str
     wall_s: float
+    error_kind: str = ""
 
 
 async def send_task(
-    agent_url: str,
+    agent: str | AgentCard,
     skill_id: str,
     payload_json: Any,
     task_id: str,
@@ -56,9 +58,9 @@ async def send_task(
     owns = http_client is None
     client_http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(deadline_s + 30))
     try:
-        client = await create_client(
-            agent_url, ClientConfig(streaming=True, httpx_client=client_http)
-        )
+        # A card object (already fetched and verified by the caller) is used as-is; a URL
+        # makes the client fetch the card itself.
+        client = await create_client(agent, ClientConfig(streaming=True, httpx_client=client_http))
         message = Message(
             message_id=uuid.uuid4().hex,
             role=Role.ROLE_USER,
@@ -70,12 +72,15 @@ async def send_task(
         state = "TASK_STATE_UNSPECIFIED"
         output: dict[str, Any] | None = None
         error = ""
+        error_kind = ""
         async for event in client.send_message(SendMessageRequest(message=message)):
             if event.HasField("status_update"):
                 status = event.status_update.status
                 state = TaskState.Name(status.state)
                 if status.HasField("message"):
                     error = " ".join(p.text for p in status.message.parts if p.text)
+                    kind = MessageToDict(status.message.metadata).get("error_kind")
+                    error_kind = kind if isinstance(kind, str) else ""
             elif event.HasField("artifact_update"):
                 data = get_data_parts(list(event.artifact_update.artifact.parts))
                 if data and isinstance(data[0], dict):
@@ -85,7 +90,13 @@ async def send_task(
     finally:
         if owns:
             await client_http.aclose()
-    return CallResult(state=state, output=output, error=error, wall_s=time.monotonic() - started)
+    return CallResult(
+        state=state,
+        output=output,
+        error=error,
+        wall_s=time.monotonic() - started,
+        error_kind=error_kind,
+    )
 
 
 def build_input(skill: SkillId, csv_text: str, truth: dict[str, Any]) -> BaseModel:

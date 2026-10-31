@@ -37,6 +37,28 @@ class Settings(BaseSettings):
     bourse_meter_url: str = "http://127.0.0.1:55200"
     bourse_registry_url: str = "http://127.0.0.1:55300"
     bourse_agent_key: SecretStr = SecretStr("")
+    # Broker (Phase 3, ADR-0025): selection priors until Phase 4 measures them.
+    bourse_broker_reliability_prior: float = 0.5
+    bourse_broker_lambda_cost: float = 1.0
+    bourse_broker_mu_latency: float = 0.005
+    bourse_broker_shadow_prices: dict[str, float] = {
+        "gemma4:12b": 0.10,
+        "qwen3.5:27b-q4_K_M": 0.25,
+    }
+    bourse_broker_latency_priors: dict[str, float] = {
+        "gemma4:12b": 5.0,
+        "qwen3.5:27b-q4_K_M": 60.0,
+    }
+    bourse_broker_agent_models: dict[str, str] = {
+        "vendor-a-profiler@vendor-a.local": "gemma4:12b",
+        "vendor-b-pii-precise@vendor-b.local": "qwen3.5:27b-q4_K_M",
+        "vendor-c-pii-fast@vendor-c.local": "gemma4:12b",
+        "vendor-b-normalizer@vendor-b.local": "gemma4:12b",
+        "vendor-a-reporter@vendor-a.local": "qwen3.5:27b-q4_K_M",
+    }
+    bourse_broker_delegation_deadline_s: float = 300.0
+    bourse_broker_wall_budget_s: float = 1800.0
+    bourse_broker_max_tokens_run: int = 20000
 
     @property
     def dev_hosts(self) -> frozenset[str]:

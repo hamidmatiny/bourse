@@ -20,6 +20,7 @@ from bourse.contracts import (
     Usage,
     Violation,
 )
+from bourse.contracts.skills_io import DatasetRef
 
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 SPEC = BudgetSpec(max_tokens_per_call=512, max_tokens_run=20_000, wall_budget_s=300.0)
@@ -36,11 +37,9 @@ INSTANCES: list[BaseModel] = [
         ),
     ),
     IntakeRequest(
-        request_id="r1",
-        dataset_uri="file:///d.csv",
-        requested_skills=(SkillId.UNITS_NORMALIZE, SkillId.REPORT_COMPOSE),
+        dataset=DatasetRef.from_csv("a,b\n1,2\n"),
+        request_text="audit this dataset",
         budget=SPEC,
-        submitted_at=NOW,
     ),
     USAGE,
     LedgerEntry(

@@ -1,6 +1,7 @@
 """Registry HTTP API (FastAPI). Every response body is a contract model."""
 
 import hmac
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -20,7 +21,7 @@ from bourse.contracts.registry import (
     VendorCreate,
 )
 from bourse.contracts.skills import SkillId
-from bourse.contracts.trust import TrustState
+from bourse.contracts.trust import TrustState, Violation, ViolationReport
 from bourse.registry.repo import VendorExists
 from bourse.registry.service import RegistryService
 from bourse.registry.state import IllegalTransition, UnknownAgent, transition
@@ -93,6 +94,26 @@ def create_app(service: RegistryService, admin_token: str) -> FastAPI:
         if await repo.get_agent(agent_id) is None:
             raise HTTPException(404, "unknown agent")
         return await repo.list_revisions(agent_id)
+
+    @app.post("/agents/{agent_id}/violations", status_code=201, dependencies=admin)
+    async def report_violation(agent_id: str, body: ViolationReport) -> Violation:
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        violation = Violation(
+            kind=body.kind,
+            severity=body.severity,
+            agent_id=agent_id,
+            evidence=body.evidence,
+            at=datetime.now(UTC),
+        )
+        await repo.add_violation(violation)
+        return violation
+
+    @app.get("/agents/{agent_id}/violations")
+    async def violations(agent_id: str) -> list[Violation]:
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        return await repo.list_violations(agent_id)
 
     @app.post("/agents/{agent_id}/state", dependencies=admin)
     async def change_state(agent_id: str, body: StateChangeRequest) -> StateTransition:

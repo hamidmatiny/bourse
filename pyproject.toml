@@ -3,6 +3,8 @@ name = "bourse"
 version = "0.0.0"
 description = "BOURSE: A2A v1.0 multi-vendor agent exchange"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "a2a-sdk==1.2.3",
@@ -16,6 +18,7 @@ dependencies = [
     "jwcrypto==1.6.1",
     "langchain-core==1.7.3",
     "langgraph==1.2.18",
+    "langgraph-checkpoint-postgres==3.2.0",
     "mcp==2.3.0",
     "opentelemetry-api==1.45.2",
     "opentelemetry-exporter-otlp==1.45.2",

@@ -1,11 +1,12 @@
 """Typed subtask DAG produced by the broker planner (Phase 3)."""
 
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from bourse.contracts.metering import BudgetSpec
 from bourse.contracts.skills import SkillId
+from bourse.contracts.skills_io import DatasetRef
+
+MAX_REQUEST_TEXT = 1000
 
 
 class Subtask(BaseModel):
@@ -56,10 +57,11 @@ class TaskDAG(BaseModel):
 
 
 class IntakeRequest(BaseModel):
+    """Operator request to the broker (Phase 3 shape, ADR-0024). `request_text` is the only
+    free text the planner LLM sees, together with the fixed skill taxonomy written in code."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    request_id: str = Field(min_length=1)
-    dataset_uri: str = Field(min_length=1)
-    requested_skills: tuple[SkillId, ...] = Field(min_length=1)
+    dataset: DatasetRef
+    request_text: str = Field(min_length=1, max_length=MAX_REQUEST_TEXT)
     budget: BudgetSpec
-    submitted_at: datetime

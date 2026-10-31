@@ -1,6 +1,18 @@
 """Typed contracts: the only interface between BOURSE components (ADR-0004)."""
 
 from bourse.contracts.approval import ApprovalDecision, ApprovalRequest, ApprovalTrigger
+from bourse.contracts.broker import (
+    CandidateScore,
+    DelegationRecord,
+    DelegationState,
+    IntakeReport,
+    RunRecord,
+    RunStatus,
+    SelectionDecision,
+    SubtaskResult,
+    SubtaskStatus,
+    UtilityTerms,
+)
 from bourse.contracts.grading import Grade
 from bourse.contracts.metering import (
     BudgetSpec,
@@ -26,7 +38,7 @@ from bourse.contracts.registry import (
 )
 from bourse.contracts.skills import SkillId
 from bourse.contracts.tasks import IntakeRequest, Subtask, TaskDAG
-from bourse.contracts.trust import Severity, TrustState, Violation
+from bourse.contracts.trust import Severity, TrustState, Violation, ViolationReport
 
 __all__ = [
     "AgentRecord",
@@ -35,8 +47,12 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalTrigger",
     "BudgetSpec",
+    "CandidateScore",
     "CardRevision",
+    "DelegationRecord",
+    "DelegationState",
     "Grade",
+    "IntakeReport",
     "IntakeRequest",
     "LedgerEntry",
     "LlmUsageRecord",
@@ -44,18 +60,25 @@ __all__ = [
     "RegisterRequest",
     "RegistrationOutcome",
     "RejectReason",
+    "RunRecord",
+    "RunStatus",
+    "SelectionDecision",
     "Severity",
     "SkillId",
     "StateChangeRequest",
     "StateTransition",
     "Subtask",
+    "SubtaskResult",
+    "SubtaskStatus",
     "TaskDAG",
     "ToolCallRecord",
     "TrustState",
     "Usage",
+    "UtilityTerms",
     "Vendor",
     "VendorCreate",
     "VendorKeys",
     "VerifyResult",
     "Violation",
+    "ViolationReport",
 ]

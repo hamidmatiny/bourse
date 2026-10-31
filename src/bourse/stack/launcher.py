@@ -30,6 +30,7 @@ SECRETS_FILE = RUN_DIR / "secrets.json"
 METER_PORT = 55200
 REGISTRY_PORT = 55300
 HEALTH_DEADLINE_S = 120.0
+BROKER_METER_ID = "broker"
 
 
 @dataclass(frozen=True)
@@ -41,19 +42,30 @@ class Service:
     env: dict[str, str] = field(default_factory=dict)
 
 
+METER_CLIENTS = (*AGENT_NAMES, BROKER_METER_ID)
+
+
 def load_secrets() -> dict[str, Any]:
+    """Meter keys per client and the registry admin token; missing entries are added."""
+    data: dict[str, Any] = {}
     if SECRETS_FILE.exists():
-        data: dict[str, Any] = json.loads(SECRETS_FILE.read_text())
+        data = json.loads(SECRETS_FILE.read_text())
+    keys: dict[str, str] = data.setdefault("meter_keys", {})
+    missing = [name for name in METER_CLIENTS if name not in keys]
+    if not missing and "admin_token" in data:
         return data
+    for name in missing:
+        keys[name] = secrets.token_hex(24)
+    data.setdefault("admin_token", secrets.token_hex(24))
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    data = {
-        "meter_keys": {name: secrets.token_hex(24) for name in AGENT_NAMES},
-        "admin_token": secrets.token_hex(24),
-    }
     fd = os.open(SECRETS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         json.dump(data, fh)
     return data
+
+
+def meter_key(name: str) -> str:
+    return str(load_secrets()["meter_keys"][name])
 
 
 def admin_token(settings: Settings) -> str:

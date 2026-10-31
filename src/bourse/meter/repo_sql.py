@@ -11,6 +11,8 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    func,
+    or_,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -46,13 +48,21 @@ class SqlMeterRepository:
             await conn.execute(llm_usage.insert().values(**record.model_dump()))
 
     async def list_usage(
-        self, agent_id: str | None = None, task_id: str | None = None
+        self, agent_id: str | None = None, task_id: str | None = None, run_id: str | None = None
     ) -> list[LlmUsageRecord]:
         stmt = select(llm_usage).order_by(llm_usage.c.id)
         if agent_id is not None:
             stmt = stmt.where(llm_usage.c.agent_id == agent_id)
         if task_id is not None:
             stmt = stmt.where(llm_usage.c.task_id == task_id)
+        if run_id is not None:
+            prefix = run_id + ":"
+            stmt = stmt.where(
+                or_(
+                    llm_usage.c.task_id == run_id,
+                    func.substr(llm_usage.c.task_id, 1, len(prefix)) == prefix,
+                )
+            )
         async with self._engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
         return [

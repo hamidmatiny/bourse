@@ -39,17 +39,15 @@ interoperability, signed cards and metering.
 ## Consequences
 - OpenTelemetry spans (Phase 4) will not cover the CrewAI agent process.
 - Agents run unattended; a crashed agent shows as unhealthy in `bourse stack status`.
-- crewai 1.6.1 adds a `security_context` argument before validating tool input against
-  `args_schema`, so a strict (extra=forbid) schema rejects every call. The CrewAI submit tool
-  uses a permissive schema, drops `security_context`, and validates the captured arguments
-  against the strict NameColumns model afterwards. First smoke run before this fix: pii_precise
-  failed 3/3.
-- crewai raises ValueError when the LLM reply is empty. A kickoff that raised after a valid
-  submit keeps that submit; otherwise it counts as one of the MAX_KICKOFFS=2 attempts.
-- gemma4:12b on Ollama 0.40.6 can open a thinking channel with `think: false` on ambiguous
-  input. Ollama strips it, which leaves content empty and no tool call (orders.csv, normalizer:
-  2 seeds, 2/2 empty). The normalizer prompt adds "If you are not sure, use null."; in the same
-  replay that gave 6/6 tool calls (3 datasets x 2 seeds).
+
+## Smoke-run fixes (Phase 2b acceptance)
+First operator smoke run (smoke-20261030T125310Z): calls completed 14/18. Second run after the
+fixes below (smoke-20261030T154654Z): calls completed 18/18, graded passed 18/18.
+
+| Agent / case | First run | Cause | Fix | Second run |
+|---|---|---|---|---|
+| pii_precise, 3 datasets | FAILED 3/3 (`internal: ValueError`) | crewai 1.6.1 adds a `security_context` argument before validating tool input against `args_schema`; the strict NameColumns schema (extra=forbid) rejected every `submit`. qwen then returned a 1-token empty reply and crewai raised ValueError. | The CrewAI tool uses a permissive args schema and drops `security_context`; the captured arguments are validated against the strict NameColumns model afterwards. A ValueError raised after a valid submit keeps that submit; without one the kickoff counts as one of MAX_KICKOFFS=2 attempts. | COMPLETED 3/3, graded passed 3/3 |
+| normalizer, orders | FAILED (`invalid_llm_output: SubmitFailed`) | gemma4:12b on Ollama 0.40.6 opens a thinking channel despite `think: false` when a column is ambiguous (`amount`); Ollama strips it, leaving empty content and no tool call (replay: 6/6 empty; removing `amount` alone fixed it). | Normalizer prompt adds "If you are not sure, use null." Replay: tool call 6/6 (3 datasets x 2 seeds), measurements units unchanged. | COMPLETED, graded passed 1/1 |
 
 ## Status
 Accepted (Phase 2b).
