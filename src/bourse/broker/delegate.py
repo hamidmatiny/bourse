@@ -160,7 +160,7 @@ class Delegator:
                 span.set_attribute("skill", subtask.skill.value)
                 span.set_attribute("agent_id", agent_id)
                 span.set_attribute("attempt", attempt)
-                record, output, detail, spot = await self._attempt(
+                record, output, detail, spot = await self.attempt(
                     run_id, subtask, agent, attempt, payload
                 )
                 await self.runs.add_delegation(record)
@@ -197,7 +197,7 @@ class Delegator:
             error_kind=last_kind,
         )
 
-    async def _attempt(
+    async def attempt(
         self,
         run_id: str,
         subtask: Subtask,

@@ -15,4 +15,4 @@ row (ADR-0013).
   The audit rows make every such activation identifiable later.
 
 ## Status
-Accepted (Phase 3). Superseded by the admission exam in Phase 5.
+Superseded by ADR-0037 (Phase 5a): activation follows the admission exam; manual activation needs --force-unsafe.

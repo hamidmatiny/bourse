@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 import uvicorn
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.types import ASGIApp
 
 from bourse.mcp_servers import pii, table, units
@@ -28,13 +29,30 @@ def build_server(name: ServerName) -> MCPServer[Any]:
     return FACTORIES[name]()
 
 
-def http_app(name: ServerName, keys: Mapping[str, str], repo: ToolUsageRepository) -> ASGIApp:
-    """Streamable HTTP, stateless, JSON responses; agent key required, usage recorded."""
+def http_app(
+    name: ServerName,
+    keys: Mapping[str, str],
+    repo: ToolUsageRepository,
+    bind_host: str = "127.0.0.1",
+) -> ASGIApp:
+    """Streamable HTTP, stateless, JSON responses; agent key required, usage recorded.
+
+    DNS-rebinding protection stays on: localhost names on the host; the compose service name
+    (mcp-<name>) inside compose.
+    """
+    security = None
+    if bind_host not in ("127.0.0.1", "localhost", "::1"):
+        security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[f"mcp-{name}:*", f"mcp-{name}", "127.0.0.1:*", "localhost:*"],
+            allowed_origins=[],
+        )
     app = build_server(name).streamable_http_app(
         stateless_http=True,
         json_response=True,
         max_request_body_size=MAX_REQUEST_BODY_BYTES,
-        host="127.0.0.1",
+        host=bind_host,
+        transport_security=security,
     )
     return ToolUsageMiddleware(app, server=name, keys=keys, repo=repo)
 
@@ -51,4 +69,5 @@ def serve(name: ServerName, port: int | None = None) -> None:
     setup_tracing(f"bourse-mcp-{name}", settings.otel_exporter_otlp_endpoint)
     keys = parse_keys(settings.bourse_meter_keys.get_secret_value())
     repo = SqlToolUsageRepository(create_async_engine(settings.bourse_database_url))
-    uvicorn.run(http_app(name, keys, repo), host="127.0.0.1", port=port or SERVER_PORTS[name])
+    host = settings.bourse_bind_host
+    uvicorn.run(http_app(name, keys, repo, host), host=host, port=port or SERVER_PORTS[name])

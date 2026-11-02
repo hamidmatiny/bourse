@@ -36,6 +36,7 @@ from bourse.contracts.trust import Severity, TrustState, Violation
 from bourse.crypto.card_sign import verify_card
 from bourse.crypto.jcs import CanonicalizationError, card_from_dict, card_to_dict, payload_digest
 from bourse.registry.fetch import MAX_CARD_BYTES, CardTooLarge, FetchFailed, fetch_card
+from bourse.registry.lint import LintConfig, host_on_vendor, lint_card
 from bourse.registry.repo import Repository, RevisionExists
 from bourse.registry.semver import SemVer
 from bourse.registry.state import transition
@@ -58,8 +59,13 @@ HARD_REASONS: frozenset[RejectReason] = frozenset(
         RejectReason.DOMAIN_MISMATCH,
         RejectReason.VERSION_ROLLBACK,
         RejectReason.VERSION_REUSE,
+        RejectReason.LINT_INJECTION,
+        RejectReason.HIDDEN_UNICODE,
+        RejectReason.FOREIGN_URL,
+        RejectReason.MARKUP,
     }
 )
+LINT_WARNING = "LINT_WARNING"
 
 _SKILL_IDS = frozenset(s.value for s in SkillId)
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -76,6 +82,7 @@ def make_agent_id(name: str, vendor_domain: str) -> str:
 class RegistryPolicy:
     dev_hosts: frozenset[str] = field(default_factory=frozenset)
     max_card_bytes: int = MAX_CARD_BYTES
+    lint: LintConfig = field(default_factory=LintConfig)
 
     def host_allowed(self, url: str, vendor_domain: str) -> bool:
         try:
@@ -85,7 +92,8 @@ class RegistryPolicy:
         if not host:
             return False
         host = host.lower()
-        return host == vendor_domain or host in self.dev_hosts
+        # ADR-0034: the vendor domain or any subdomain of it (vendor hostnames in compose).
+        return host_on_vendor(host, vendor_domain) or host in self.dev_hosts
 
 
 class _Reject(Exception):
@@ -106,8 +114,12 @@ class RegistryService:
         fetch_client: httpx.AsyncClient | None = None,
         policy: RegistryPolicy | None = None,
         clock: Callable[[], datetime] = _default_clock,
+        on_accepted: Callable[[str], object] | None = None,
     ) -> None:
         self.repo = repo
+        # Called with agent_id after an accepted registration that leaves the agent PENDING
+        # (the admission exam hook, ADR-0037).
+        self.on_accepted = on_accepted
         self._client = fetch_client
         self._policy = policy or RegistryPolicy()
         self._clock = clock
@@ -203,6 +215,12 @@ class RegistryService:
                 raise _Reject(VERIFY_TO_REJECT[verify_result], f"verify_result={verify_result}")
             skills = self._check_skills(card)
             self._check_domains(card, vendor)
+            lint = lint_card(card_to_dict(card), vendor.domain, self._policy.lint)
+            if lint.hard:
+                first = lint.hard[0]
+                assert first.reason is not None
+                details = "; ".join(f"{f.field}: {f.detail}" for f in lint.hard[:5])
+                raise _Reject(first.reason, f"{len(lint.hard)} lint finding(s): {details}")
             new_version = self._parse_version(card.version)
             digest = payload_digest(card)
             if existing is not None:
@@ -269,6 +287,18 @@ class RegistryService:
                 verify_result,
                 attributable,
             )
+        for warning in lint.soft:
+            await self.repo.add_violation(
+                Violation(
+                    kind=LINT_WARNING,
+                    severity=Severity.SOFT,
+                    agent_id=agent_id,
+                    evidence=f"{warning.field}: {warning.detail}",
+                    at=now,
+                )
+            )
+        if self.on_accepted is not None and record.state is TrustState.PENDING:
+            self.on_accepted(agent_id)
         return RegistrationOutcome(
             accepted=True,
             agent_id=agent_id,

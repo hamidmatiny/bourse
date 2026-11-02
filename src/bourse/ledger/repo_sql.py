@@ -43,6 +43,7 @@ ledger_entries = Table(
     Column("wall_ms", Float, nullable=False),
     Column("spot_check_passed", Boolean),
     Column("at", DateTime(timezone=True), nullable=False),
+    Column("kind", Text, nullable=False),
 )
 
 selection_decisions = Table(

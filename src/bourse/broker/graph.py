@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import anyio
 import anyio.from_thread
@@ -38,6 +38,9 @@ from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.executor import Executor
 from bourse.runtime.watchdog import Watchdog
 from bourse.telemetry import current_trace_id, tracer
+
+if TYPE_CHECKING:
+    from bourse.broker.canary import CanaryRunner
 
 HEARTBEAT_SLACK_S = 60.0
 
@@ -104,6 +107,7 @@ class Broker:
     heartbeat_timeout_s: float
     echo: Callable[[str], None] = field(default=lambda _line: None)
     ledger: LedgerRepository | None = None  # selection_decisions are persisted when set
+    canaries: "CanaryRunner | None" = None
     _watchdog: Watchdog | None = None
 
     def beat(self) -> None:
@@ -244,6 +248,14 @@ class Broker:
                 )
             result = await self.delegator.run_subtask(run_id, sub, decision, agents, payload)
             span.set_attribute("outcome", result.status.value)
+            if self.canaries is not None and self.ledger is not None:
+                tried = {
+                    r.agent_id
+                    for r in await self.ledger.list_rows(run_id=run_id)
+                    if r.subtask_id == sub.id
+                }
+                for agent_id in sorted(tried):
+                    await self.canaries.after_delegation(agents[agent_id], sub.skill)
             if result.agent_id:
                 span.set_attribute("agent_id", result.agent_id)
             return result

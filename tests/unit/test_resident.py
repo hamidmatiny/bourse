@@ -64,3 +64,17 @@ async def test_background_sampling_writes_jsonl(tmp_path: Path) -> None:
     lines = [json.loads(line) for line in out.read_text().splitlines()]
     assert [x["resident_bytes"] for x in lines[:3]] == [UNDER, OVER, UNDER]
     assert m.peak == OVER
+
+
+def test_model_reloads_counted() -> None:
+    from bourse.runtime.resident import LoadedModel
+
+    m = _monitor([])
+    m.observe_models([LoadedModel("gemma", 10), LoadedModel("qwen", 20)])  # first sample
+    m.observe_models([LoadedModel("gemma", 10), LoadedModel("qwen", 20)])
+    assert m.reloads == 0
+    m.observe_models([LoadedModel("gemma", 12), LoadedModel("qwen", 20)])  # size changed
+    m.observe_models([LoadedModel("qwen", 20)])  # unloaded: not a reload
+    m.observe_models([LoadedModel("qwen", 20), LoadedModel("gemma", 12)])  # loaded again
+    assert m.reloads == 2
+    assert m.reload_summary() == "model reloads 2"

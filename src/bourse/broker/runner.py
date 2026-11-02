@@ -15,6 +15,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from bourse.agents.common.spec import METER_TASK_HEADER
+from bourse.broker.canary import CanaryRunner
 from bourse.broker.delegate import DEADLINE_GRACE_S, Delegator, RegistryClient
 from bourse.broker.graph import HEARTBEAT_SLACK_S, Broker
 from bourse.broker.repo_sql import SqlRunRepository
@@ -44,9 +45,10 @@ from bourse.runtime.breaker import GLOBAL_BREAKER, CircuitBreaker
 from bourse.runtime.budget import BudgetLedger
 from bourse.runtime.executor import LlmOnlyExecutor
 from bourse.runtime.resident import ResidentMonitor, metrics_path, monitoring, ollama_sampler
-from bourse.stack.launcher import BROKER_METER_ID, admin_token, meter_key
+from bourse.stack.launcher import BROKER_METER_ID, admin_token, load_secrets, meter_key
 from bourse.stack.smoke import DEFAULT_DATASET_DIR
 from bourse.telemetry import setup_tracing, traced_async_client
+from bourse.trust.repo import SqlHoneytokenRepository
 
 E2E_DIR = Path("data/e2e")
 E2E_REQUEST = "audit this dataset for PII, units and summary stats"
@@ -128,7 +130,11 @@ async def broker_from_settings(
             AsyncPostgresSaver.from_conn_string(conninfo(settings.bourse_database_url)) as saver,
         ):
             monitor = ResidentMonitor(
-                ollama_sampler(http, settings.ollama_base_url),
+                ollama_sampler(
+                    http,
+                    settings.bourse_ollama_ps_url,
+                    settings.bourse_ollama_ps_key.get_secret_value(),
+                ),
                 GLOBAL_BREAKER.trip,
                 limit_bytes=settings.bourse_resident_limit_bytes,
                 sustain_s=settings.bourse_resident_sustain_s,
@@ -173,6 +179,18 @@ async def broker_from_settings(
                 ledger=ledger,
             )
             delegator.heartbeat = broker.beat
+            secret = settings.bourse_honeytoken_secret.get_secret_value() or str(
+                load_secrets()["honeytoken_secret"]
+            )
+            broker.canaries = CanaryRunner(
+                ledger=ledger,
+                recorder=recorder,
+                delegator=delegator,
+                registry=registry,
+                tokens=SqlHoneytokenRepository(engine),
+                secret=secret.encode(),
+                every=settings.bourse_canary_every,
+            )
             async with monitoring(monitor):
                 yield Session(broker, ledger, monitor)
     finally:
@@ -318,8 +336,8 @@ async def e2e_all(
     datasets: tuple[str, ...] = E2E_DATASETS,
     echo: Callable[[str], None] = print,
     repeat: int = 1,
-) -> tuple[list[E2ERow], Path, int]:
-    """Returns (rows, written json, resident peak bytes)."""
+) -> tuple[list[E2ERow], Path, "E2EStats"]:
+    """Returns (rows, written json, resident peak / model reloads / canary count)."""
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     rows: list[E2ERow] = []
     plan = [(r, ds) for r in range(1, repeat + 1) for ds in datasets]
@@ -342,11 +360,25 @@ async def e2e_all(
                 f"eta={eta:.0f}s"
             )
         peak = session.monitor.peak
+        reloads = session.monitor.reloads
+        canary_rows = [r for r in await session.ledger.list_rows() if r.kind == "canary"]
     out = E2E_DIR / f"e2e-{stamp}.json"
     await anyio.Path(E2E_DIR).mkdir(parents=True, exist_ok=True)
-    payload = {"resident_peak_bytes": peak, "runs": [asdict(r) for r in rows]}
+    payload = {
+        "resident_peak_bytes": peak,
+        "model_reloads": reloads,
+        "canaries_total": len(canary_rows),
+        "runs": [asdict(r) for r in rows],
+    }
     await anyio.Path(out).write_text(json.dumps(payload, indent=2) + "\n")
-    return rows, out, peak
+    return rows, out, E2EStats(peak, reloads, len(canary_rows))
+
+
+@dataclass(frozen=True)
+class E2EStats:
+    resident_peak: int
+    model_reloads: int
+    canaries_total: int  # canary ledger rows in this database, all runs
 
 
 def selection_share(rows: list[E2ERow]) -> list[str]:
@@ -363,7 +395,7 @@ def selection_share(rows: list[E2ERow]) -> list[str]:
     return lines
 
 
-def e2e_summary(rows: list[E2ERow], resident_peak: int, limit: int) -> list[str]:
+def e2e_summary(rows: list[E2ERow], stats: "E2EStats", limit: int) -> list[str]:
     n = len(rows)
     return [
         f"runs succeeded {sum(r.status == 'SUCCEEDED' for r in rows)}/{n}",
@@ -377,6 +409,8 @@ def e2e_summary(rows: list[E2ERow], resident_peak: int, limit: int) -> list[str]
         f"{sum(r.subtasks_total for r in rows)}",
         f"tokens in {sum(r.tokens_in for r in rows)} out {sum(r.tokens_out for r in rows)}",
         f"total shadow_usd {sum(r.shadow_usd for r in rows):.6f}",
-        f"resident peak {resident_peak} (limit {limit})",
+        f"resident peak {stats.resident_peak} (limit {limit})",
+        f"model reloads {stats.model_reloads}",
+        f"canary rows in ledger {stats.canaries_total}",
         *(f"trace {r.dataset} repeat {r.repeat} {r.trace_id}" for r in rows),
     ]

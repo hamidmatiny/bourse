@@ -2,7 +2,7 @@
 
 import hmac
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -26,14 +26,22 @@ from bourse.registry.repo import VendorExists
 from bourse.registry.service import RegistryService
 from bourse.registry.state import IllegalTransition, UnknownAgent, transition
 
+if TYPE_CHECKING:
+    from bourse.trust.exam import ExamScheduler
+
 
 def _error(status: int, detail: str) -> JSONResponse:
     return JSONResponse(ApiError(status=status, detail=detail).model_dump(), status_code=status)
 
 
-def create_app(service: RegistryService, admin_token: str) -> FastAPI:
+def create_app(
+    service: RegistryService, admin_token: str, exams: "ExamScheduler | None" = None
+) -> FastAPI:
+    """`exams`: when set, accepted PENDING registrations start an admission exam (ADR-0037)."""
     app = FastAPI(title="BOURSE registry", version="0.1.0")
     repo = service.repo
+    if exams is not None:
+        service.on_accepted = exams.schedule
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -114,6 +122,20 @@ def create_app(service: RegistryService, admin_token: str) -> FastAPI:
         if await repo.get_agent(agent_id) is None:
             raise HTTPException(404, "unknown agent")
         return await repo.list_violations(agent_id)
+
+    @app.get("/agents/{agent_id}/transitions")
+    async def transitions(agent_id: str) -> list[StateTransition]:
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        return await repo.list_transitions(agent_id)
+
+    @app.post("/agents/{agent_id}/exam", status_code=202, dependencies=admin)
+    async def start_exam(agent_id: str) -> dict[str, bool]:
+        if exams is None:
+            raise HTTPException(503, "admission exams not configured")
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        return {"started": exams.schedule(agent_id)}
 
     @app.post("/agents/{agent_id}/state", dependencies=admin)
     async def change_state(agent_id: str, body: StateChangeRequest) -> StateTransition:

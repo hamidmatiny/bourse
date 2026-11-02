@@ -2,10 +2,18 @@
 # nothing per call. They give the selector and the ledger one comparable cost unit.
 # Values are placeholders chosen by the operator, not measurements. Bump `version` on any
 # change; every ledger row records the version it was priced with.
-version = "2026-10-31.1"
+version = "2026-10-31.3"
 
 # USD per MCP tool call.
 tool_call_usd = 0.000001
+
+[models."qwen3.5:4b"]
+in_per_1m = 0.04
+out_per_1m = 0.16
+
+[models."gemma4:e4b"]
+in_per_1m = 0.05
+out_per_1m = 0.20
 
 [models."gemma4:12b"]
 in_per_1m = 0.10

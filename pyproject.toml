@@ -62,8 +62,9 @@ files = ["src", "tests"]
 
 # jwcrypto, protobuf and jsonschema ship no type information (no py.typed, no stubs that track protobuf 7).
 # pandas 3.1 ships no py.typed; it is only used to hand a frame to pandera and DuckDB (ADR-0029).
+# PyYAML ships no py.typed; it only renders/reads docker-compose.yml (ADR-0034).
 [[tool.mypy.overrides]]
-module = ["jwcrypto.*", "google.protobuf.*", "jsonschema.*", "pandas", "pandas.*"]
+module = ["jwcrypto.*", "google.protobuf.*", "jsonschema.*", "pandas", "pandas.*", "yaml"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
@@ -78,8 +79,9 @@ testpaths = ["tests"]
 markers = [
     "live: requires local Ollama/OmniRoute services; excluded by default",
     "db: requires Postgres at BOURSE_DATABASE_URL; excluded by default",
+    "compose: requires the compose stack (bourse stack up --mode compose); excluded by default",
 ]
-addopts = "-m \"not live and not db\" -q"
+addopts = "-m \"not live and not db and not compose\" -q"
 
 [dependency-groups]
 dev = [

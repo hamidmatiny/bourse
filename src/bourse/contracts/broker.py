@@ -170,6 +170,7 @@ class LedgerRow(BaseModel):
     wall_ms: float = Field(ge=0)
     spot_check_passed: bool | None = None
     at: datetime
+    kind: Literal["task", "canary"] = "task"  # canaries count in reliability (ADR-0037)
 
 
 class AgentScore(BaseModel):

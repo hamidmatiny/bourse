@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from bourse.config import get_settings
 from bourse.contracts.metering import Usage
 from bourse.llm.base import (
     ChatMessage,
@@ -32,14 +33,21 @@ class OllamaProvider:
         model: str,
         client: httpx.AsyncClient | None = None,
         sampling: Sampling | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._client = client or httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT)
         self._sampling = sampling
+        # Single source (ADR-0038): BOURSE_NUM_CTX_BY_MODEL, sent on every request.
+        self._num_ctx = num_ctx if num_ctx is not None else get_settings().num_ctx_for(model)
+
+    @property
+    def num_ctx(self) -> int:
+        return self._num_ctx
 
     def with_sampling(self, sampling: Sampling) -> "OllamaProvider":
-        return OllamaProvider(self._base_url, self._model, self._client, sampling)
+        return OllamaProvider(self._base_url, self._model, self._client, sampling, self._num_ctx)
 
     @property
     def name(self) -> str:
@@ -61,13 +69,12 @@ class OllamaProvider:
             "messages": [ollama_message(m) for m in messages],
             "stream": False,
             "think": False,
-            "options": {"num_predict": max_tokens},
+            "options": {"num_predict": max_tokens, "num_ctx": self._num_ctx},
         }
         if self._sampling is not None:
             body["options"].update(
                 temperature=self._sampling.temperature,
                 seed=self._sampling.seed,
-                num_ctx=self._sampling.num_ctx,
             )
             body["keep_alive"] = self._sampling.keep_alive
         if tools:

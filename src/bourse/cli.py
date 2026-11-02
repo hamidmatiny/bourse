@@ -5,7 +5,7 @@ import json
 import platform
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 import httpx
 import typer
@@ -35,6 +35,9 @@ runs_app = typer.Typer(no_args_is_help=True, help="Broker run records.")
 e2e_app = typer.Typer(no_args_is_help=True, help="Broker end-to-end runs on fixtures.")
 usage_app = typer.Typer(no_args_is_help=True, help="Metered LLM usage.")
 ledger_app = typer.Typer(no_args_is_help=True, help="Delegation ledger.")
+egress_app = typer.Typer(no_args_is_help=True, help="Egress control (compose).")
+exam_app = typer.Typer(no_args_is_help=True, help="Admission exams.")
+db_app = typer.Typer(no_args_is_help=True, help="Database helpers.")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
@@ -48,6 +51,9 @@ app.add_typer(runs_app, name="runs")
 app.add_typer(e2e_app, name="e2e")
 app.add_typer(usage_app, name="usage")
 app.add_typer(ledger_app, name="ledger")
+app.add_typer(egress_app, name="egress")
+app.add_typer(exam_app, name="exam")
+app.add_typer(db_app, name="db")
 
 
 def _pkg_version(name: str) -> str:
@@ -68,9 +74,9 @@ def doctor() -> None:
     typer.echo(f"MCP_SPEC_VERSION {MCP_SPEC_VERSION}")
 
 
-async def _probe(base_url: str, model: str, out_dir: Path, num_ctx: int) -> int:
+async def _probe(base_url: str, model: str, out_dir: Path) -> int:
     async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-        report, written = await run_probe(client, base_url, model, out_dir, num_ctx=num_ctx)
+        report, written = await run_probe(client, base_url, model, out_dir)
     typer.echo(report.model_dump_json(indent=2))
     typer.echo(f"written: {written}")
     failures: list[str] = []
@@ -95,9 +101,7 @@ def probe(
     """Probe the local Ollama server and write data/probe/probe-<utc>.json."""
     settings = get_settings()
     chosen = model or settings.bourse_model_small
-    code = asyncio.run(
-        _probe(settings.ollama_base_url, chosen, Path(out_dir), settings.bourse_meter_num_ctx)
-    )
+    code = asyncio.run(_probe(settings.ollama_base_url, chosen, Path(out_dir)))
     raise typer.Exit(code)
 
 
@@ -170,10 +174,10 @@ def card_verify(
 
 @registry_app.command("serve")
 def registry_serve(
-    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    host: Annotated[str, typer.Option(help="Default: BOURSE_BIND_HOST")] = "",
     port: Annotated[int, typer.Option()] = 55300,
 ) -> None:
-    """Serve the registry API against Postgres (BOURSE_DATABASE_URL)."""
+    """Serve the registry API against Postgres; admission exams run in the background."""
     import uvicorn
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -187,8 +191,29 @@ def registry_serve(
     service = RegistryService(
         SqlRepository(engine), client, RegistryPolicy(dev_hosts=settings.dev_hosts)
     )
-    app_ = create_app(service, settings.bourse_admin_token.get_secret_value())
-    uvicorn.run(app_, host=host, port=port)
+    exams = None
+    secret = settings.bourse_honeytoken_secret.get_secret_value().encode()
+    if secret:
+        from bourse.telemetry import setup_tracing, traced_async_client
+        from bourse.trust.exam import ExamConfig, ExamRunner, ExamScheduler
+        from bourse.trust.repo import SqlHoneytokenRepository
+
+        setup_tracing("bourse-registry", settings.otel_exporter_otlp_endpoint)
+        runner = ExamRunner(
+            service.repo,
+            traced_async_client(timeout=httpx.Timeout(settings.bourse_exam_deadline_s + 30)),
+            SqlHoneytokenRepository(engine),
+            secret,
+            ExamConfig(
+                k=settings.bourse_exam_k,
+                pass_n=settings.bourse_exam_pass,
+                cooldown_s=settings.bourse_exam_cooldown_s,
+                deadline_s=settings.bourse_exam_deadline_s,
+            ),
+        )
+        exams = ExamScheduler(runner)
+    app_ = create_app(service, settings.bourse_admin_token.get_secret_value(), exams)
+    uvicorn.run(app_, host=host or settings.bourse_bind_host, port=port)
 
 
 @attacks_app.command("phase1")
@@ -262,12 +287,13 @@ def meter_serve(
             sampling=Sampling(
                 temperature=settings.bourse_meter_temperature,
                 seed=settings.bourse_meter_seed,
-                num_ctx=settings.bourse_meter_num_ctx,
                 keep_alive=settings.bourse_meter_keep_alive,
             ),
+            ollama_base_url=settings.ollama_base_url,
         ),
+        upstream_client=client,
     )
-    uvicorn.run(app_, host="127.0.0.1", port=port)
+    uvicorn.run(app_, host=settings.bourse_bind_host, port=port)
 
 
 @agent_app.command("serve")
@@ -285,11 +311,35 @@ def agent_serve(name: Annotated[str, typer.Argument(help="Agent name")]) -> None
 
 
 @stack_app.command("up")
-def stack_up() -> None:
-    """Start MCP servers, meter, registry and agents; wait for health; print a table."""
-    from bourse.stack.launcher import services, start, table, wait_healthy
+def stack_up(
+    mode: Annotated[str, typer.Option(help="compose (default) or host")] = "compose",
+) -> None:
+    """compose: isolated containers with egress control (ADR-0034); host: local processes."""
+    from bourse.stack.launcher import (
+        HOST_MODE_WARNING,
+        compose,
+        services,
+        set_mode,
+        start,
+        table,
+        wait_healthy,
+        write_compose_env,
+    )
 
-    svcs = services(get_settings())
+    settings = get_settings()
+    if mode not in ("compose", "host"):
+        raise typer.BadParameter("mode must be compose or host")
+    set_mode(mode)
+    if mode == "compose":
+        written = write_compose_env(settings)
+        typer.echo(f"env files {len(written)} (data/run/env/)")
+        result = compose("up", "-d", check=False)
+        typer.echo((result.stdout + result.stderr).strip())
+        if result.returncode != 0:
+            raise typer.Exit(result.returncode)
+        raise typer.Exit(_wait_compose_healthy(timeout_s=300.0))
+    typer.echo(HOST_MODE_WARNING)
+    svcs = services(settings)
     pids = {s.name: start(s) for s in svcs}
     health = wait_healthy(svcs)
     rows = [["name", "port", "pid", "healthy"]]
@@ -297,64 +347,293 @@ def stack_up() -> None:
     typer.echo(table(rows))
     up = sum(health.values())
     typer.echo(f"healthy {up}/{len(svcs)} (logs: data/logs/<name>.log)")
+    typer.echo(HOST_MODE_WARNING)
     raise typer.Exit(0 if up == len(svcs) else 1)
 
 
 @stack_app.command("down")
 def stack_down() -> None:
-    """Stop every service started by `bourse stack up`."""
-    from bourse.stack.launcher import services, stop
+    """Stop the stack (compose: containers removed, volumes kept)."""
+    from bourse.stack.launcher import compose, current_mode, services, stop
 
+    if current_mode() == "compose":
+        result = compose("down", check=False)
+        typer.echo((result.stdout + result.stderr).strip())
+        typer.echo("compose down" + (" ok" if result.returncode == 0 else " FAILED"))
+        raise typer.Exit(result.returncode)
     svcs = services(get_settings())
     stopped = sum(stop(s.name) for s in svcs)
     typer.echo(f"stopped {stopped}/{len(svcs)}")
 
 
+def _registry_states() -> list[list[str]]:
+    from bourse.contracts.registry import AgentRecord, StateTransition
+
+    settings = get_settings()
+    base = settings.bourse_registry_url.rstrip("/")
+    rows = [["agent", "state", "last transition"]]
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            agents = [AgentRecord.model_validate(a) for a in client.get(f"{base}/agents").json()]
+            for a in sorted(agents, key=lambda x: x.agent_id):
+                raw = client.get(f"{base}/agents/{a.agent_id}/transitions").json()
+                ts = [StateTransition.model_validate(t) for t in raw]
+                last = f"{ts[-1].actor}: {ts[-1].reason}" if ts else "-"
+                rows.append([a.agent_id, a.state.value, last])
+    except httpx.HTTPError as exc:
+        rows.append(["registry unreachable", type(exc).__name__, "-"])
+    return rows
+
+
+def _service_ok(c: dict[str, Any]) -> bool:
+    health = str(c.get("Health") or "-")
+    state = str(c.get("State") or "-")
+    if c.get("Service") == "migrate":
+        return state == "exited" and "exited (0)" in str(c.get("Status", "")).lower()
+    return state == "running" and health in ("healthy", "-")
+
+
+def _compose_status() -> int:
+    from bourse.stack.launcher import compose_ps, table
+
+    ps = compose_ps()
+    rows = [["service", "state", "health"]]
+    ok = 0
+    for c in sorted(ps, key=lambda c: str(c.get("Service"))):
+        ok += _service_ok(c)
+        rows.append(
+            [str(c.get("Service")), str(c.get("State") or "-"), str(c.get("Health") or "-")]
+        )
+    typer.echo(table(rows))
+    typer.echo(f"services ok {ok}/{len(ps)}")
+    return 0 if ps and ok == len(ps) else 1
+
+
+def _wait_compose_healthy(timeout_s: float) -> int:
+    """Poll `docker compose ps` until every service is running+healthy (migrate: exited 0)."""
+    import time
+
+    started = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout_s:
+            return _compose_status()
+        from bourse.stack.launcher import compose_ps
+
+        ps = compose_ps()
+        pending = [str(c.get("Service")) for c in ps if not _service_ok(c)]
+        typer.echo(f"[{elapsed:4.0f}s] services ok {len(ps) - len(pending)}/{len(ps)}")
+        if ps and not pending:
+            return _compose_status()
+        time.sleep(5)
+
+
 @stack_app.command("status")
 def stack_status() -> None:
-    """Show pid and health of every service."""
-    from bourse.stack.launcher import healthy, read_pid, services, table
+    """Service health and each registered agent's trust state and last transition."""
+    from bourse.stack.launcher import (
+        HOST_MODE_WARNING,
+        current_mode,
+        healthy,
+        read_pid,
+        services,
+        table,
+    )
 
-    svcs = services(get_settings())
-    rows = [["name", "port", "pid", "healthy"]]
-    ok = 0
-    for s in svcs:
-        pid = read_pid(s.name)
-        h = pid is not None and healthy(s)
-        ok += h
-        rows.append([s.name, str(s.port), str(pid or "-"), str(h)])
-    typer.echo(table(rows))
-    typer.echo(f"healthy {ok}/{len(svcs)}")
-    raise typer.Exit(0 if ok == len(svcs) else 1)
+    if current_mode() == "compose":
+        code = _compose_status()
+    else:
+        typer.echo(HOST_MODE_WARNING)
+        svcs = services(get_settings())
+        rows = [["name", "port", "pid", "healthy"]]
+        ok = 0
+        for s in svcs:
+            pid = read_pid(s.name)
+            h = pid is not None and healthy(s)
+            ok += h
+            rows.append([s.name, str(s.port), str(pid or "-"), str(h)])
+        typer.echo(table(rows))
+        typer.echo(f"healthy {ok}/{len(svcs)}")
+        code = 0 if ok == len(svcs) else 1
+    states = _registry_states()
+    typer.echo(table(states))
+    active = sum(r[1] == "ACTIVE" for r in states[1:])
+    typer.echo(f"agents ACTIVE {active}/{len(states) - 1}")
+    raise typer.Exit(code)
 
 
 @stack_app.command("register")
 def stack_register() -> None:
-    """Onboard vendor-a/b/c with pinned JWKS and register the 5 agents by card_url."""
-    from bourse.stack.launcher import table
+    """Onboard vendor-a/b/c with pinned JWKS and register the 5 agents by card_url.
+
+    In compose mode the registry starts an admission exam for each new PENDING agent."""
+    from bourse.stack.launcher import current_mode, table
     from bourse.stack.register import register_all
 
-    rows, accepted, total = register_all(get_settings())
+    rows, accepted, total = register_all(get_settings(), current_mode())
     typer.echo(table(rows))
     typer.echo(f"registered {accepted}/{total} ACCEPTED")
     raise typer.Exit(0 if accepted == total else 1)
 
 
+@stack_app.command("wait-active")
+def stack_wait_active(
+    timeout: Annotated[float, typer.Option(help="Seconds (max 600)")] = 600.0,
+) -> None:
+    """Poll the registry until every registered agent is ACTIVE (exams finish) or timeout."""
+    import time
+
+    from bourse.stack.launcher import table
+
+    timeout = min(timeout, 600.0)
+    started = time.monotonic()
+    while True:
+        states = _registry_states()
+        agents = states[1:]
+        active = sum(r[1] == "ACTIVE" for r in agents)
+        elapsed = time.monotonic() - started
+        eta = elapsed / active * (len(agents) - active) if active else float("nan")
+        typer.echo(f"[{elapsed:5.0f}s] ACTIVE {active}/{len(agents)} eta={eta:.0f}s")
+        if agents and active == len(agents):
+            typer.echo(table(states))
+            raise typer.Exit(0)
+        if elapsed >= timeout:
+            typer.echo(table(states))
+            raise typer.Exit(1)
+        time.sleep(10)
+
+
+@stack_app.command("compose-file")
+def stack_compose_file(
+    check: Annotated[
+        bool, typer.Option(help="Exit 1 if docker-compose.yml is out of date")
+    ] = False,
+) -> None:
+    """Render docker-compose.yml from bourse.stack.topology (single source)."""
+    import yaml
+
+    from bourse.stack.topology import COMPOSE_HEADER, compose_document
+
+    text = COMPOSE_HEADER + yaml.safe_dump(compose_document(), sort_keys=False, width=100)
+    target = Path("docker-compose.yml")
+    if check:
+        same = target.exists() and yaml.safe_load(target.read_text()) == compose_document()
+        typer.echo("docker-compose.yml " + ("up to date" if same else "OUT OF DATE"))
+        raise typer.Exit(0 if same else 1)
+    target.write_text(text)
+    typer.echo(f"written: {target}")
+
+
 @stack_app.command("activate")
 def stack_activate(
     all_agents: Annotated[bool, typer.Option("--all", help="Activate every PENDING agent")] = False,
+    force_unsafe: Annotated[
+        bool, typer.Option("--force-unsafe", help="Bypass the admission exam (audited)")
+    ] = False,
 ) -> None:
-    """Admin PENDING -> ACTIVE before the admission exam exists (ADR-0028)."""
+    """Admin PENDING -> ACTIVE without the admission exam (ADR-0037; audited as unsafe)."""
     from bourse.stack.launcher import table
     from bourse.stack.register import activate_all
 
-    if not all_agents:
-        typer.echo("pass --all (per-agent activation is not offered)", err=True)
+    if not (all_agents and force_unsafe):
+        typer.echo(
+            "manual activation bypasses the admission exam; pass --all --force-unsafe", err=True
+        )
         raise typer.Exit(2)
     rows, activated, total = activate_all(get_settings())
     typer.echo(table(rows))
     typer.echo(f"activated {activated}/{total}")
     raise typer.Exit(0 if activated == total else 1)
+
+
+@app.command("healthcheck")
+def healthcheck(url: Annotated[str, typer.Argument(help="URL; healthy if status < 500")]) -> None:
+    """Container healthcheck: reads only the status line (SSE endpoints never finish)."""
+    try:
+        with httpx.stream("GET", url, timeout=4.0) as resp:
+            raise typer.Exit(0 if resp.status_code < 500 else 1)
+    except httpx.HTTPError as exc:
+        raise typer.Exit(1) from exc
+
+
+@egress_app.command("dnsmasq-config")
+def egress_dnsmasq_config() -> None:
+    """Print the egress resolver config generated from the topology (ADR-0035)."""
+    from bourse.stack.topology import dnsmasq_conf
+
+    typer.echo(dnsmasq_conf(), nl=False)
+
+
+@egress_app.command("sinkhole")
+def egress_sinkhole() -> None:
+    """Serve the sinkhole on BOURSE_SINKHOLE_PORTS; write egress_events; report violations."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.broker.delegate import RegistryClient
+    from bourse.contracts.trust import ViolationReport
+    from bourse.egress.sinkhole import Sinkhole
+    from bourse.stack.launcher import admin_token
+    from bourse.stack.topology import agent_ids_by_ip, ip_identities
+    from bourse.trust.repo import SqlEgressRepository, SqlHoneytokenRepository
+
+    settings = get_settings()
+    ports = [int(p) for p in settings.bourse_sinkhole_ports.split(",") if p.strip()]
+
+    async def serve() -> None:
+        engine = create_async_engine(settings.bourse_database_url)
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            registry = RegistryClient(http, settings.bourse_registry_url, admin_token(settings))
+
+            async def report(agent_id: str, v: ViolationReport) -> None:
+                try:
+                    await registry.report_violation(agent_id, v)
+                except httpx.HTTPError as exc:
+                    typer.echo(f"violation not recorded for {agent_id}: {exc!r}", err=True)
+
+            sinkhole = Sinkhole(
+                identities=ip_identities(),
+                agent_ips=agent_ids_by_ip(),
+                repo=SqlEgressRepository(engine),
+                tokens=SqlHoneytokenRepository(engine),
+                report=report,
+            )
+            typer.echo(f"sinkhole listening on {ports}")
+            await sinkhole.serve(ports, settings.bourse_bind_host)
+
+    asyncio.run(serve())
+
+
+@db_app.command("ensure")
+def db_ensure() -> None:
+    """CREATE DATABASE for BOURSE_DATABASE_URL if it does not exist (compose migrate step)."""
+    import psycopg
+    from sqlalchemy.engine import make_url
+
+    url = make_url(get_settings().bourse_database_url)
+    name = url.database or "bourse"
+    admin = url.set(drivername="postgresql", database="postgres").render_as_string(
+        hide_password=False
+    )
+    with psycopg.connect(admin, autocommit=True) as conn:
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+        if exists is None:
+            conn.execute(f'CREATE DATABASE "{name}"')
+    typer.echo(f"database {name} " + ("exists" if exists else "created"))
+
+
+@exam_app.command("run")
+def exam_run(agent_id: Annotated[str, typer.Argument(help="Agent id")]) -> None:
+    """Ask the registry to (re)run the admission exam for a PENDING agent."""
+    from bourse.stack.launcher import admin_token
+
+    settings = get_settings()
+    resp = httpx.post(
+        f"{settings.bourse_registry_url.rstrip('/')}/agents/{agent_id}/exam",
+        headers={"Authorization": f"Bearer {admin_token(settings)}"},
+        timeout=10.0,
+    )
+    typer.echo(f"HTTP {resp.status_code} {resp.text}")
+    raise typer.Exit(0 if resp.status_code == 202 else 1)
 
 
 @smoke_app.command("all")
@@ -417,7 +696,7 @@ def run_cmd(
             typer.echo(f"dataset {dataset}")
             report = await session.broker.start(intake(settings, csv_text, request))
             rows = await subtask_rows(session.broker, report, truth)
-            resident = session.monitor.summary()
+            resident = session.monitor.summary() + "\n" + session.monitor.reload_summary()
         typer.echo(table(subtask_table(rows)))
         typer.echo(f"run {report.run_id} {report.status.value} planner={report.planner_used}")
         if report.abort_reason:
@@ -485,7 +764,7 @@ def runs_resume(run_id: Annotated[str, typer.Argument(help="Run id")]) -> None:
     async def resume() -> int:
         async with broker_from_settings(settings, echo=lambda line: typer.echo(line)) as session:
             report = await session.broker.resume(run_id)
-            resident = session.monitor.summary()
+            resident = session.monitor.summary() + "\n" + session.monitor.reload_summary()
         typer.echo(f"run {report.run_id} {report.status.value}")
         typer.echo(resident)
         return 0 if report.status.value == "SUCCEEDED" else 1
@@ -508,7 +787,7 @@ def e2e_all_cmd(
 
     async def run() -> int:
         names = tuple(d.strip() for d in datasets.split(",") if d.strip())
-        rows, out, peak = await e2e_all(
+        rows, out, stats = await e2e_all(
             settings, names, echo=lambda line: typer.echo(line), repeat=repeat
         )
         header = ["dataset", "rep", "run_id", "status", "planner", "graded", "fallbacks", "tokens"]
@@ -526,11 +805,11 @@ def e2e_all_cmd(
             for r in rows
         ]
         typer.echo(table([header, *body]))
-        for line in e2e_summary(rows, peak, settings.bourse_resident_limit_bytes):
+        for line in e2e_summary(rows, stats, settings.bourse_resident_limit_bytes):
             typer.echo(line)
         typer.echo(f"written: {out}")
         ok = all(r.status == "SUCCEEDED" for r in rows)
-        return 0 if ok and peak <= settings.bourse_resident_limit_bytes else 1
+        return 0 if ok and stats.resident_peak <= settings.bourse_resident_limit_bytes else 1
 
     raise typer.Exit(asyncio.run(run()))
 
@@ -541,7 +820,7 @@ def usage_maxcall() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from bourse.meter.repo_sql import SqlMeterRepository
-    from bourse.meter.stats import maxcall_rows, recommend_num_ctx
+    from bourse.meter.stats import NUM_CTX_CHOICES, maxcall_rows, recommend_num_ctx
     from bourse.stack.launcher import table
 
     settings = get_settings()
@@ -553,16 +832,27 @@ def usage_maxcall() -> None:
         finally:
             await engine.dispose()
         rows = maxcall_rows(usage)
-        out = [["model", "calls", "max", "p50", "p95"]]
-        out += [[r.model, str(r.calls), str(r.max), str(r.p50), str(r.p95)] for r in rows]
+        out = [["model", "calls", "max", "p50", "p95", "recommended", "configured"]]
+        for r in rows:
+            out.append(
+                [
+                    r.model,
+                    str(r.calls),
+                    str(r.max),
+                    str(r.p50),
+                    str(r.p95),
+                    str(recommend_num_ctx(r.max)),
+                    str(settings.num_ctx_for(r.model)),
+                ]
+            )
         typer.echo(table(out))
-        overall = max((r.max for r in rows), default=0)
-        typer.echo(f"max tokens per call {overall}")
-        typer.echo(
-            f"recommended num_ctx {recommend_num_ctx(overall)} "
-            "(smallest of 4096/6144/8192 >= 2 x max)"
-        )
-        typer.echo(f"configured BOURSE_METER_NUM_CTX {settings.bourse_meter_num_ctx}")
+        choices = "/".join(str(c) for c in NUM_CTX_CHOICES)
+        typer.echo(f"rule: recommended = smallest of {choices} >= 2 x max (per model)")
+        typer.echo(f"BOURSE_NUM_CTX_BY_MODEL {settings.bourse_num_ctx_by_model}")
+        mismatched = [
+            r.model for r in rows if recommend_num_ctx(r.max) != settings.num_ctx_for(r.model)
+        ]
+        typer.echo(f"models where configured != recommended: {len(mismatched)}")
         return 0
 
     raise typer.Exit(asyncio.run(show()))

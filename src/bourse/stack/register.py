@@ -29,7 +29,16 @@ def vendor_body(domain: str, name: str, key_dir: Path = DEFAULT_KEY_DIR) -> dict
     return body.model_dump(mode="json")
 
 
-def register_all(settings: Settings) -> tuple[list[list[str]], int, int]:
+def card_url_for(name: str, port: int, mode: str) -> str:
+    """Compose: the vendor hostname the registry fetches inside the network; host: loopback."""
+    if mode == "compose":
+        from bourse.stack.topology import agent_card_url
+
+        return agent_card_url(name)
+    return f"http://127.0.0.1:{port}/.well-known/agent-card.json"
+
+
+def register_all(settings: Settings, mode: str = "host") -> tuple[list[list[str]], int, int]:
     """Return (table rows, accepted, total)."""
     base = settings.bourse_registry_url.rstrip("/")
     headers = {"Authorization": f"Bearer {admin_token(settings)}"}
@@ -42,7 +51,7 @@ def register_all(settings: Settings) -> tuple[list[list[str]], int, int]:
                 raise RuntimeError(f"vendor {domain}: HTTP {resp.status_code} {resp.text[:200]}")
         specs = specs_from_settings(settings)
         for spec in specs.values():
-            card_url = f"http://127.0.0.1:{spec.port}/.well-known/agent-card.json"
+            card_url = card_url_for(spec.name, spec.port, mode)
             resp = client.post(
                 f"{base}/agents/register",
                 json={"vendor_domain": spec.vendor_domain, "card_url": card_url},
@@ -65,7 +74,7 @@ def register_all(settings: Settings) -> tuple[list[list[str]], int, int]:
     return rows, accepted, len(specs)
 
 
-ACTIVATION_REASON = "pre-exam manual activation (Phase 3; replaced by admission exam in Phase 5)"
+ACTIVATION_REASON = "manual activation bypassing admission exam"
 
 
 def activate_all(settings: Settings) -> tuple[list[list[str]], int, int]:

@@ -6,6 +6,8 @@ written before the agent's response reaches the broker, so the join is complete 
 delegation returns.
 """
 
+from typing import Literal
+
 from bourse.contracts.broker import DelegationRecord, LedgerRow
 from bourse.ledger.prices import PriceTable
 from bourse.ledger.repo import LedgerRepository
@@ -37,6 +39,7 @@ class LedgerRecorder:
         *,
         major: int,
         spot_check_passed: bool | None,
+        kind: Literal["task", "canary"] = "task",
     ) -> LedgerRow:
         task_id = f"{delegation.run_id}:{delegation.subtask_id}:{delegation.attempt}"
         llm = await self.usage.list_usage(task_id=task_id)
@@ -59,6 +62,7 @@ class LedgerRecorder:
             wall_ms=delegation.wall_ms,
             spot_check_passed=spot_check_passed,
             at=delegation.at,
+            kind=kind,
         )
         await self.repo.add_row(row)
         return row

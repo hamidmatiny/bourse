@@ -95,10 +95,10 @@ it lists.
 
 | Agent | Framework | Vendor | Skills | Model (via meter) |
 |---|---|---|---|---|
-| profiler | LangGraph | vendor-a.local | schema.profile, stats.compute | gemma4:12b |
+| profiler | LangGraph | vendor-a.local | schema.profile, stats.compute | qwen3.5:4b |
 | pii_precise | CrewAI 1.6.1 | vendor-b.local | pii.detect | qwen3.5:27b-q4_K_M |
-| pii_fast | a2a-sdk | vendor-c.local | pii.detect | gemma4:12b |
-| normalizer | a2a-sdk | vendor-b.local | units.normalize | gemma4:12b |
+| pii_fast | a2a-sdk | vendor-c.local | pii.detect | qwen3.5:4b |
+| normalizer | a2a-sdk | vendor-b.local | units.normalize | qwen3.5:4b |
 | reporter | LangGraph | vendor-a.local | report.compose | qwen3.5:27b-q4_K_M |
 
 Numbers in agent outputs come from MCP tool results; the LLM only makes choices that a tool cannot,
@@ -121,39 +121,50 @@ Reproduce the Phase 1 table: `uv run bourse attacks phase1`.
 ## Quickstart
 
 Requirements: macOS or Linux, [uv](https://docs.astral.sh/uv/), Docker, Ollama 0.40.6 on the host
-with `gemma4:12b` and `qwen3.5:27b-q4_K_M` pulled, started with
+with `qwen3.5:4b` and `qwen3.5:27b-q4_K_M` pulled, started with
 `OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_NUM_PARALLEL=2 OLLAMA_FLASH_ATTENTION=1
-OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=4096` (Ollama 0.40.6 ignores per-request
-`num_ctx`; 4096 = smallest of 4096/6144/8192 >= 2 x the observed max of 1666 tokens per call,
-ADR-0033). Runs sample `/api/ps` every 5 s and abort if the resident total stays above
+OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=4096`. Small model qwen3.5:4b: gemma4:12b on
+Ollama's MLX runner grew to about 16.7 GB and with qwen3.5:27b (15.5 GB) exceeded 26 GB, and
+Docker Desktop's memory limit must leave room for both models: Ollama 0.40.6
+refuses to load qwen3.5:27b (16.2 GiB predicted) when free system RAM is lower, and with
+Docker allowed all 48 GiB its VM held 33-36 GB (ADR-0038); a 12 GiB limit is used here. Every Ollama request also sends
+`options.num_ctx` from `BOURSE_NUM_CTX_BY_MODEL` (ADR-0038). Runs sample `/api/ps` every 5 s and abort if the resident total stays above
 26,000,000,000 bytes for 30 s. With both models loaded the probe measured
 23,993,702,388 resident bytes (limit 26 GB, AGENTS.md rule 9). `gitleaks` is needed only for the
 secret scan.
 
+Compose mode (default; ADR-0034): agents run in containers on an internal network with vendor
+hostnames, no published ports, only their own vendor's key, and DNS egress to a sinkhole
+(ADR-0035). They are activated by an admission exam (ADR-0037), not by hand.
+
 ```sh
 uv sync
 cp .env.example .env
-docker compose up -d postgres && uv run alembic upgrade head
 uv run bourse keys gen --vendor vendor-a.local
 uv run bourse keys gen --vendor vendor-b.local
 uv run bourse keys gen --vendor vendor-c.local
 uv run bourse probe
-uv run bourse stack up          # 10 processes; logs in data/logs/
-uv run bourse stack register    # onboards 3 vendors, registers 5 agents
-uv run bourse smoke all         # 18 tasks; writes data/smoke/smoke-<utc>.json
-uv run bourse stack activate --all   # PENDING -> ACTIVE until the Phase 5 exam (ADR-0028)
-uv run bourse run --dataset people --request "audit this dataset for PII, units and summary stats"
-uv run bourse e2e all --repeat 3   # broker on 3 fixtures x 3; writes data/e2e/e2e-<utc>.json
-uv run bourse scores            # Wilson LB per agent/skill from spot-checked ledger rows
-uv run bourse usage maxcall     # tokens per call per model; num_ctx rule (ADR-0033)
-uv run bourse ledger export     # data/exports/ledger-<utc>.parquet (pandera-validated)
+docker compose build
+uv run bourse stack up --mode compose   # writes data/run/env/*.env, waits for health
+uv run bourse stack register            # vendors + 5 agents; exams start automatically
+uv run bourse stack wait-active         # until 5/5 ACTIVE via exam (max 600 s)
+docker compose --profile test run --rm egress-probe   # 2 attributed egress events
+docker compose run --rm broker bourse e2e all --repeat 3   # data/e2e/e2e-<utc>.json
+uv run bourse usage maxcall             # tokens per call per model; num_ctx rule (ADR-0038)
 uv run bourse stack down
 ```
 
-Tests: `uv run pytest` (unit, no services), `uv run pytest -m db` (Postgres),
-`uv run pytest -m live` (Ollama and the running stack).
+Host mode (`bourse stack up --mode host`) runs the same services as local processes on the
+ports below and prints "WARNING: egress not enforced in host mode". Other commands:
+`bourse run`, `bourse scores`, `bourse ledger show|export`, `bourse runs show|resume`,
+`bourse smoke all`.
 
-All services bind to 127.0.0.1:
+Tests: `uv run pytest` (unit, no services), `uv run pytest -m db` (Postgres),
+`uv run pytest -m live` (Ollama and the host-mode stack), `uv run pytest -m compose` (the
+compose stack).
+
+Host ports (registry, Postgres, Jaeger and the OTel collector are also published in compose
+mode; agents never are):
 
 | Service | Port |
 |---|---|
@@ -180,7 +191,7 @@ All services bind to 127.0.0.1:
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): hard rules and phase plan.
-- [docs/adr/](docs/adr/README.md): 33 architecture decision records.
+- [docs/adr/](docs/adr/README.md): 38 architecture decision records.
 
 ## License
 

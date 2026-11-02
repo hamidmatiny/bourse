@@ -106,8 +106,9 @@ def specs_from_settings(settings: Settings) -> dict[str, AgentSpec]:
     return agent_specs(settings.bourse_model_large, settings.bourse_model_small)
 
 
-def mcp_urls(host: str = "127.0.0.1") -> dict[str, str]:
-    return {name: f"http://{host}:{port}/mcp" for name, port in SERVER_PORTS.items()}
+def mcp_urls(template: str = "http://127.0.0.1:{port}/mcp") -> dict[str, str]:
+    """BOURSE_MCP_URL_TEMPLATE: host mode uses 127.0.0.1, compose uses mcp-<name> (ADR-0034)."""
+    return {name: template.format(name=name, port=port) for name, port in SERVER_PORTS.items()}
 
 
 def build_app(spec: AgentSpec, runtime: AgentRuntime, base_url: str) -> FastAPI:
@@ -125,7 +126,11 @@ def serve_agent(name: str, settings: Settings, meter_url: str, meter_key: str) -
     setup_tracing(f"bourse-agent-{name}", settings.otel_exporter_otlp_endpoint)
     client = traced_async_client(timeout=httpx.Timeout(None, connect=5.0))
     runtime = AgentRuntime(
-        meter_url=meter_url, meter_key=meter_key, http_client=client, mcp_servers=mcp_urls()
+        meter_url=meter_url,
+        meter_key=meter_key,
+        http_client=client,
+        mcp_servers=mcp_urls(settings.bourse_mcp_url_template),
     )
-    base_url = f"http://127.0.0.1:{spec.port}"
-    uvicorn.run(build_app(spec, runtime, base_url), host="127.0.0.1", port=spec.port)
+    # Compose: the card names the vendor hostname (e.g. profiler.vendor-a.local).
+    base_url = settings.bourse_agent_base_url or f"http://127.0.0.1:{spec.port}"
+    uvicorn.run(build_app(spec, runtime, base_url), host=settings.bourse_bind_host, port=spec.port)

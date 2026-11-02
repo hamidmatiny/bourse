@@ -28,6 +28,7 @@ LEDGER_SCHEMA = pa.DataFrameSchema(
         "wall_ms": pa.Column(float, pa.Check.ge(0)),
         "spot_check_passed": pa.Column(object, nullable=True),
         "at": pa.Column(str),
+        "kind": pa.Column(str, pa.Check.isin(["task", "canary"])),
     },
     strict=True,
     ordered=True,

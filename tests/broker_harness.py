@@ -23,6 +23,7 @@ from bourse.agents.common.card import signed_card
 from bourse.agents.common.errors import TaskRejected
 from bourse.agents.common.executor import ParsedRequest, SkillExecutor
 from bourse.agents.common.spec import AgentRuntime, AgentSpec
+from bourse.broker.canary import CanaryRunner
 from bourse.broker.delegate import Delegator, RegistryClient
 from bourse.broker.graph import Broker
 from bourse.broker.planner import TEMPLATE_PLAN, PlanSubmission
@@ -38,7 +39,7 @@ from bourse.contracts.broker import IntakeReport
 from bourse.contracts.metering import BudgetSpec
 from bourse.contracts.registry import RegisterRequest
 from bourse.contracts.skills import SkillId
-from bourse.contracts.skills_io import DatasetRef
+from bourse.contracts.skills_io import DatasetRef, ReportIn
 from bourse.contracts.tasks import IntakeRequest
 from bourse.contracts.trust import TrustState
 from bourse.crypto.jcs import card_to_dict
@@ -57,11 +58,14 @@ from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.budget import BudgetLedger
 from bourse.runtime.executor import LlmOnlyExecutor
 from bourse.telemetry import traced_async_client
+from bourse.trust.exam_bank import truth_for
+from bourse.trust.honeytokens import InMemoryHoneytokenRepository
 from tests.agent_harness import METER, METER_CHAT, submit_call
 from tests.datasets import csv_text, truth
 from tests.registry_helpers import Party, make_party, make_service
 
 REGISTRY = "http://registry.test"
+HONEYTOKEN_SECRET = b"broker-harness-honeytoken-secret"
 ADMIN = secrets.token_hex(16)
 DATASET = "people"
 TRUTH = truth(DATASET)
@@ -101,6 +105,24 @@ Behaviour = Callable[[ParsedRequest], Awaitable[Outcome]]
 
 async def complete(req: ParsedRequest) -> Outcome:
     return Outcome(output=good_output(req.skill))
+
+
+async def honest(req: ParsedRequest) -> Outcome:
+    """Answers computed from the delegated input with our deterministic tools."""
+    if req.skill is SkillId.REPORT_COMPOSE:
+        payload = req.payload
+        assert isinstance(payload, ReportIn) and payload.stats is not None
+        cited = [{"column": s.column, "stat": "mean", "value": s.mean} for s in payload.stats.stats]
+        return Outcome(output={"summary": "Numeric columns summarised.", "cited": cited})
+    truth = truth_for(req.payload.dataset.csv_text)
+    key = {
+        SkillId.SCHEMA_PROFILE: "profile",
+        SkillId.STATS_COMPUTE: "stats",
+        SkillId.PII_DETECT: "pii",
+        SkillId.UNITS_NORMALIZE: "units",
+    }[req.skill]
+    out: dict[str, Any] = truth[key]
+    return Outcome(output=out)
 
 
 class FakeExecutor(SkillExecutor):
@@ -199,6 +221,10 @@ class BrokerBed:
     ledger: InMemoryLedgerRepository = field(default_factory=InMemoryLedgerRepository)
     tool_usage: InMemoryToolUsageRepository = field(default_factory=InMemoryToolUsageRepository)
     measured: MeasuredConfig | None = None  # None -> PriorPolicy (Phase 3 tests)
+    activate: bool = True  # False: agents stay PENDING (admission exam tests)
+    register_agents: bool = True  # False: served but not registered
+    canary_every: int | None = None  # set -> broker sends canaries (ADR-0037)
+    tokens: InMemoryHoneytokenRepository = field(default_factory=InMemoryHoneytokenRepository)
 
     async def setup(self) -> "BrokerBed":
         parties = {a.party.domain: a.party for a in self.agents}
@@ -214,35 +240,40 @@ class BrokerBed:
         meter.post(METER_CHAT).mock(side_effect=self._meter)
         self.transport.apps["meter.test"] = httpx.MockTransport(meter.async_handler)
         for agent in self.agents:
-            spec = AgentSpec(
-                name=agent.name,
-                framework="a2a-sdk",
-                vendor_domain=agent.party.domain,
-                vendor_org=agent.party.domain,
-                display_name=agent.name,
-                description=agent.description,
-                version="1.0.0",
-                skills=agent.skills,
-                model="fake",
-                port=0,
-                mcp={},
-            )
-            runtime = AgentRuntime(meter_url=METER, meter_key="unused", http_client=self.http)
-            executor = FakeExecutor(spec, runtime, agent.behaviour)
-            self.executors[agent.name] = executor
-            card = signed_card(spec, f"http://{agent.host}", agent.party.key)
-            self.transport.apps[agent.host] = httpx.ASGITransport(
-                app=build_agent_app(executor, card)
-            )
-            outcome = await service.register(
-                RegisterRequest(vendor_domain=agent.party.domain, card_url=agent.card_url)
-            )
-            assert outcome.accepted, outcome
-            assert outcome.agent_id == agent.agent_id
+            await self.add_agent(agent)
+        return self
+
+    async def add_agent(self, agent: FakeAgent) -> None:
+        spec = AgentSpec(
+            name=agent.name,
+            framework="a2a-sdk",
+            vendor_domain=agent.party.domain,
+            vendor_org=agent.party.domain,
+            display_name=agent.name,
+            description=agent.description,
+            version="1.0.0",
+            skills=agent.skills,
+            model="fake",
+            port=0,
+            mcp={},
+        )
+        runtime = AgentRuntime(meter_url=METER, meter_key="unused", http_client=self.http)
+        executor = FakeExecutor(spec, runtime, agent.behaviour)
+        self.executors[agent.name] = executor
+        card = signed_card(spec, f"http://{agent.host}", agent.party.key)
+        self.transport.apps[agent.host] = httpx.ASGITransport(app=build_agent_app(executor, card))
+        if not self.register_agents:
+            return
+        service = self.registry_service
+        outcome = await service.register(
+            RegisterRequest(vendor_domain=agent.party.domain, card_url=agent.card_url)
+        )
+        assert outcome.accepted, outcome
+        assert outcome.agent_id == agent.agent_id
+        if self.activate:
             await transition(
                 service.repo, agent.agent_id, TrustState.ACTIVE, actor="test", reason="test"
             )
-        return self
 
     async def _meter(self, request: httpx.Request) -> httpx.Response:
         self.meter_bodies.append(request.content.decode())
@@ -292,6 +323,17 @@ class BrokerBed:
             ledger=self.ledger,
         )
         delegator.heartbeat = broker.beat
+        if self.canary_every is not None:
+            assert delegator.ledger is not None
+            broker.canaries = CanaryRunner(
+                ledger=self.ledger,
+                recorder=delegator.ledger,
+                delegator=delegator,
+                registry=registry,
+                tokens=self.tokens,
+                secret=HONEYTOKEN_SECRET,
+                every=self.canary_every,
+            )
         return broker
 
     def drift(self, agent: FakeAgent, card_dict: dict[str, Any]) -> None:

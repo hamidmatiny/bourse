@@ -42,7 +42,7 @@ def _tool(task_id: str) -> ToolUsageRecord:
 
 def test_prices_table_loaded_and_unknown_model_priced_high() -> None:
     assert PRICES.version
-    assert set(PRICES.models) == {"gemma4:12b", "qwen3.5:27b-q4_K_M"}
+    assert set(PRICES.models) == {"qwen3.5:4b", "gemma4:e4b", "gemma4:12b", "qwen3.5:27b-q4_K_M"}
     worst = PRICES.model_price("unknown-model")
     assert worst.in_per_1m == max(p.in_per_1m for p in PRICES.models.values())
 

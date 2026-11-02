@@ -1,0 +1,9 @@
+# Never in the image: secrets, runtime data, local environments, VCS.
+.env
+data/
+.venv/
+.git/
+**/__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

@@ -19,7 +19,6 @@ class Sampling(BaseModel):
 
     temperature: float = 0.0
     seed: int = 1234
-    num_ctx: int = Field(default=8192, gt=0)
     keep_alive: str = "30m"
 
 

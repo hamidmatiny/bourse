@@ -14,6 +14,7 @@ from typing import Any
 import anyio
 import httpx
 
+from bourse.config import get_settings
 from bourse.contracts.probe import ProbeReport
 from bourse.runtime.deadline import DeadlineExceeded, deadline
 
@@ -51,9 +52,11 @@ async def run_probe(
     model: str,
     out_dir: Path | None = None,
     deadline_s: float = 120.0,
-    num_ctx: int = 8192,
+    num_ctx: int | None = None,
 ) -> tuple[ProbeReport, Path | None]:
     base = base_url.rstrip("/")
+    if num_ctx is None:  # single source (ADR-0038)
+        num_ctx = get_settings().num_ctx_for(model)
 
     async with deadline(15.0):
         version_resp = await client.get(f"{base}/api/version")

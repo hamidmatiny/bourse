@@ -49,6 +49,8 @@ class MeterConfig:
     # Sampling is set here, never by clients (ADR-0020). A request may pick the seed with
     # X-Bourse-Seed; temperature/top_p/seed fields in the request body are ignored.
     sampling: Sampling = field(default_factory=Sampling)
+    # Read-only /api/ps passthrough for the resident monitor (ADR-0033); None disables it.
+    ollama_base_url: str | None = None
 
 
 def with_sampling(provider: Provider, sampling: Sampling) -> Provider:
@@ -69,11 +71,22 @@ def create_meter_app(
     breaker: CircuitBreaker = GLOBAL_BREAKER,
     config: MeterConfig | None = None,
     clock: Callable[[], datetime] = _now,
+    upstream_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     """`providers` maps each allowlisted model to its ordered provider chain."""
     cfg = config or MeterConfig()
     app = FastAPI(title="BOURSE metering proxy", version="0.1.0")
     app.add_middleware(TraceMiddleware, span_name="llm call")
+
+    @app.get("/ollama/api/ps")
+    async def ollama_ps(request: Request) -> Response:
+        """Loaded models (sizes) for the broker's resident monitor inside compose (ADR-0033)."""
+        if agent_for(request.headers.get("authorization"), keys) is None:
+            return JSONResponse(error_body("unknown or missing agent key", "unauthorized"), 401)
+        if cfg.ollama_base_url is None or upstream_client is None:
+            return JSONResponse(error_body("ps passthrough disabled", "not_found"), 404)
+        resp = await upstream_client.get(f"{cfg.ollama_base_url.rstrip('/')}/api/ps", timeout=5.0)
+        return Response(resp.content, resp.status_code, media_type="application/json")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:

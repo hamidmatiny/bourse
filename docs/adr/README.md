@@ -30,9 +30,14 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0025](0025-selection-policy.md) | Selection policy interface and Phase 3 priors | 3 |
 | [0026](0026-delegation-protocol.md) | Delegation protocol: card-drift check, attempts, fallbacks, contract validation | 3 |
 | [0027](0027-run-persistence-checkpointing.md) | Run persistence and checkpointing | 3 |
-| [0028](0028-manual-activation.md) | Manual activation before the admission exam (temporary) | 3 |
+| [0028](0028-manual-activation.md) | Manual activation before the admission exam (temporary) | superseded |
 | [0029](0029-ledger-tool-usage-shadow-pricing.md) | Ledger, measured tool usage, shadow pricing | 4 |
 | [0030](0030-reliability-from-spot-checks.md) | Reliability from runtime spot checks, never from graders | 4 |
 | [0031](0031-measured-policy-exploration.md) | MeasuredPolicy and exploration quota | 4 |
 | [0032](0032-otel-propagation.md) | OpenTelemetry propagation | 4 |
 | [0033](0033-memory-guard-num-ctx.md) | Memory guard and num_ctx decision | 4 |
+| [0034](0034-compose-isolation-vendor-hostnames.md) | Compose isolation and vendor hostnames | 5a |
+| [0035](0035-egress-dns-sinkhole.md) | Egress DNS sinkhole and attribution | 5a |
+| [0036](0036-card-lint.md) | Card lint | 5a |
+| [0037](0037-admission-exam-canaries.md) | Admission exam, canaries, exam/bench disjointness | 5a |
+| [0038](0038-num-ctx-single-source.md) | num_ctx single source | 5a |

@@ -52,11 +52,12 @@ def load_secrets() -> dict[str, Any]:
         data = json.loads(SECRETS_FILE.read_text())
     keys: dict[str, str] = data.setdefault("meter_keys", {})
     missing = [name for name in METER_CLIENTS if name not in keys]
-    if not missing and "admin_token" in data:
+    if not missing and "admin_token" in data and "honeytoken_secret" in data:
         return data
     for name in missing:
         keys[name] = secrets.token_hex(24)
     data.setdefault("admin_token", secrets.token_hex(24))
+    data.setdefault("honeytoken_secret", secrets.token_hex(32))
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(SECRETS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
@@ -107,6 +108,7 @@ def services(settings: Settings) -> list[Service]:
             {
                 "BOURSE_ADMIN_TOKEN": admin_token(settings),
                 "BOURSE_DEV_HOSTS": settings.bourse_dev_hosts or "127.0.0.1,localhost",
+                "BOURSE_HONEYTOKEN_SECRET": str(sec["honeytoken_secret"]),
             },
         )
     )
@@ -212,3 +214,55 @@ def stop(name: str, grace_s: float = 10.0) -> bool:
 def table(rows: list[list[str]]) -> str:
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(widths[i]) for i, c in enumerate(r)).rstrip() for r in rows)
+
+
+# --- compose mode (ADR-0034) ------------------------------------------------------------------
+
+MODE_FILE = RUN_DIR / "mode"
+HOST_MODE_WARNING = "WARNING: egress not enforced in host mode"
+
+
+def current_mode() -> str:
+    return MODE_FILE.read_text().strip() if MODE_FILE.exists() else "host"
+
+
+def set_mode(mode: str) -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    MODE_FILE.write_text(mode + "\n")
+
+
+def write_compose_env(settings: Settings) -> list[Path]:
+    """data/run/env/<service>.env (0600) from data/run/secrets.json; never committed."""
+    from bourse.stack.topology import ENV_DIR, env_files
+
+    out_dir = Path(ENV_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    files = env_files(
+        load_secrets(),
+        model_large=settings.bourse_model_large,
+        model_small=settings.bourse_model_small,
+    )
+    for name, content in files.items():
+        path = out_dir / f"{name}.env"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+        written.append(path)
+    return written
+
+
+def compose(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["docker", "compose", *args], check=check, text=True, capture_output=True)
+
+
+def compose_ps() -> list[dict[str, Any]]:
+    result = compose("ps", "--all", "--format", "json", check=False)
+    rows: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parsed = json.loads(line)
+        rows.extend(parsed if isinstance(parsed, list) else [parsed])
+    return rows

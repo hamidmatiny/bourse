@@ -9,8 +9,9 @@ raises the peak.
 
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,10 +22,19 @@ RESIDENT_LIMIT_BYTES = 26_000_000_000
 METRICS_DIR = Path("data/metrics")
 
 
+@dataclass(frozen=True)
+class LoadedModel:
+    name: str
+    size: int
+
+
 class ResidentMonitor:
+    """`sample` returns the resident total, or the loaded models (then reloads are counted:
+    a model that appears after the first sample, or whose size changes, is one reload)."""
+
     def __init__(
         self,
-        sample: Callable[[], Awaitable[int]],
+        sample: Callable[[], Awaitable[int | Sequence[LoadedModel]]],
         on_trip: Callable[[str], None],
         *,
         limit_bytes: int = RESIDENT_LIMIT_BYTES,
@@ -43,7 +53,17 @@ class ResidentMonitor:
         self.peak = 0
         self.samples = 0
         self.tripped = False
+        self.reloads = 0
         self._over_since: float | None = None
+        self._models: dict[str, int] | None = None
+
+    def observe_models(self, models: Sequence[LoadedModel]) -> None:
+        current = {m.name: m.size for m in models}
+        if self._models is not None:
+            for name, size in current.items():
+                if name not in self._models or self._models[name] != size:
+                    self.reloads += 1
+        self._models = current
 
     def observe(self, now: float, total: int) -> None:
         self.samples += 1
@@ -60,10 +80,18 @@ class ResidentMonitor:
 
     async def run(self) -> None:
         while True:
+            total: int | None
             try:
-                total = await self.sample()
+                sampled = await self.sample()
             except (httpx.HTTPError, ValueError, KeyError):
+                sampled = None
+            if sampled is None:
                 total = None
+            elif isinstance(sampled, int):
+                total = sampled
+            else:
+                self.observe_models(sampled)
+                total = sum(m.size for m in sampled)
             now = self.clock()
             if total is not None:
                 self.observe(now, total)
@@ -76,12 +104,23 @@ class ResidentMonitor:
     def summary(self) -> str:
         return f"resident peak {self.peak} (limit {self.limit_bytes})"
 
+    def reload_summary(self) -> str:
+        return f"model reloads {self.reloads}"
 
-def ollama_sampler(client: httpx.AsyncClient, base_url: str) -> Callable[[], Awaitable[int]]:
-    async def sample() -> int:
-        resp = await client.get(f"{base_url.rstrip('/')}/api/ps", timeout=5.0)
+
+def ollama_sampler(
+    client: httpx.AsyncClient, ps_url: str, key: str = ""
+) -> Callable[[], Awaitable[Sequence[LoadedModel]]]:
+    """GET <ps_url> (Ollama /api/ps, or the meter's passthrough in compose with a key)."""
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+
+    async def sample() -> Sequence[LoadedModel]:
+        resp = await client.get(ps_url, timeout=5.0, headers=headers)
         resp.raise_for_status()
-        return sum(int(m.get("size") or 0) for m in resp.json().get("models") or [])
+        return [
+            LoadedModel(str(m.get("name", "")), int(m.get("size") or 0))
+            for m in resp.json().get("models") or []
+        ]
 
     return sample
 

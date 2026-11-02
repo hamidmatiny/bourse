@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from bourse.config import get_settings
 from bourse.llm.base import Provider, Sampling
 from bourse.llm.ollama import OllamaProvider
 from bourse.llm.omniroute import OmniRouteProvider
@@ -305,14 +306,15 @@ async def test_proxy_sets_sampling_and_ignores_client_values(
     upstream = request_json(route.calls.last.request)
     assert upstream["options"]["temperature"] == 0.0
     assert upstream["options"]["seed"] == 1234
-    assert upstream["options"]["num_ctx"] == 8192
+    # Phase 5a: num_ctx comes only from BOURSE_NUM_CTX_BY_MODEL (ADR-0038), not from Sampling.
+    assert upstream["options"]["num_ctx"] == get_settings().num_ctx_for(MODEL)
     assert "top_p" not in upstream["options"]
     assert upstream["keep_alive"] == "30m"
 
 
 async def test_seed_header_and_configured_sampling(mock: respx.Router) -> None:
     route = mock.post(OLLAMA_CHAT).mock(return_value=ollama_reply("x"))
-    sampling = Sampling(temperature=0.3, seed=7, num_ctx=4096, keep_alive="5m")
+    sampling = Sampling(temperature=0.3, seed=7, keep_alive="5m")
     h = Harness(
         httpx.AsyncClient(transport=httpx.MockTransport(mock.async_handler)),
         config=MeterConfig(max_tokens_per_call=64, deadline_s=5.0, sampling=sampling),
@@ -320,6 +322,7 @@ async def test_seed_header_and_configured_sampling(mock: respx.Router) -> None:
     resp = await _post(h, _body(), headers={**HEADERS, "X-Bourse-Seed": "42"})
     assert resp.status_code == 200
     options = request_json(route.calls.last.request)["options"]
-    assert (options["temperature"], options["seed"], options["num_ctx"]) == (0.3, 42, 4096)
+    assert (options["temperature"], options["seed"]) == (0.3, 42)
+    assert options["num_ctx"] == get_settings().num_ctx_for(MODEL)
     bad = await _post(h, _body(), headers={**HEADERS, "X-Bourse-Seed": "abc"})
     assert bad.status_code == 400

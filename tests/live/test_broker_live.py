@@ -15,8 +15,8 @@ pytestmark = pytest.mark.live
 
 async def test_e2e_three_fixtures_twice_through_stack() -> None:
     settings = get_settings()
-    rows, out, peak = await e2e_all(settings, repeat=2)
-    for line in e2e_summary(rows, peak, settings.bourse_resident_limit_bytes):
+    rows, out, stats = await e2e_all(settings, repeat=2)
+    for line in e2e_summary(rows, stats, settings.bourse_resident_limit_bytes):
         print(line)
     print(f"written: {out}")
     for r in rows:
@@ -25,4 +25,4 @@ async def test_e2e_three_fixtures_twice_through_stack() -> None:
     assert all(r.tokens_in > 0 and r.tokens_out > 0 for r in rows)
     assert all(r.spotcheck_total >= 5 for r in rows)
     assert all(r.trace_id for r in rows)
-    assert peak <= settings.bourse_resident_limit_bytes
+    assert stats.resident_peak <= settings.bourse_resident_limit_bytes
