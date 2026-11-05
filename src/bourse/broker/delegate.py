@@ -9,13 +9,15 @@ candidate. Every attempt is one append-only delegation row.
 """
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from bourse.broker.inflight import InFlight, InFlightHandle
+from bourse.broker.interrupts import SESSION_SMUGGLING, evaluate_interrupt
 from bourse.broker.repo import RunRepository
 from bourse.broker.spotcheck import spot_check
 from bourse.contracts.broker import (
@@ -25,6 +27,7 @@ from bourse.contracts.broker import (
     SubtaskResult,
     SubtaskStatus,
 )
+from bourse.contracts.metering import TaskBudget
 from bourse.contracts.registry import AgentRecord
 from bourse.contracts.skills import SkillId
 from bourse.contracts.skills_io import SKILL_IO, DatasetRef, ReportIn
@@ -43,7 +46,10 @@ MAX_ATTEMPTS = 2
 # card fetch, connection setup and the final status event.
 DEADLINE_GRACE_S = 15.0
 CARD_DRIFT = "CARD_DRIFT"
+SPOTCHECK_FAIL = "SPOTCHECK_FAIL"
+USAGE_MISREPORT = "USAGE_MISREPORT"
 BREAKER_DETAIL = "BreakerOpen"
+MISREPORT_RATIO = 0.10
 
 _A2A_STATES: dict[str, DelegationState] = {
     "TASK_STATE_FAILED": DelegationState.FAILED,
@@ -51,6 +57,17 @@ _A2A_STATES: dict[str, DelegationState] = {
     "TASK_STATE_INPUT_REQUIRED": DelegationState.INTERRUPTED,
     "TASK_STATE_AUTH_REQUIRED": DelegationState.INTERRUPTED,
 }
+
+
+def _as_int(value: Any) -> int | None:
+    """Protobuf Struct JSON (MessageToDict) turns integers into floats."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 class RunAborted(Exception):
@@ -71,6 +88,13 @@ class RegistryClient:
         resp.raise_for_status()
         return [AgentRecord.model_validate(a) for a in resp.json()]
 
+    async def get_agent(self, agent_id: str) -> AgentRecord | None:
+        resp = await self._http.get(f"{self._base}/agents/{agent_id}")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return AgentRecord.model_validate(resp.json())
+
     async def report_violation(self, agent_id: str, report: ViolationReport) -> None:
         resp = await self._http.post(
             f"{self._base}/agents/{agent_id}/violations",
@@ -82,6 +106,19 @@ class RegistryClient:
     async def refresh(self, agent_id: str) -> int:
         resp = await self._http.post(f"{self._base}/agents/{agent_id}/refresh")
         return resp.status_code
+
+
+class MeterBudgetClient:
+    def __init__(self, http: httpx.AsyncClient, base_url: str, broker_key: str) -> None:
+        self._http = http
+        self._base = base_url.rstrip("/")
+        self._auth = {"Authorization": f"Bearer {broker_key}"}
+
+    async def register(self, budget: TaskBudget) -> None:
+        resp = await self._http.post(
+            f"{self._base}/budgets", json=budget.model_dump(mode="json"), headers=self._auth
+        )
+        resp.raise_for_status()
 
 
 def build_input(
@@ -115,6 +152,12 @@ class Delegator:
         grace_s: float = DEADLINE_GRACE_S,
         heartbeat: Callable[[], None] = lambda: None,
         ledger: LedgerRecorder | None = None,
+        inflight: InFlight | None = None,
+        budgets: MeterBudgetClient | None = None,
+        task_max_tokens: int = 8 * 1024,
+        task_max_calls: int = 20,
+        usage_lookup: Callable[[str], Awaitable[list[Any]]] | None = None,
+        contention_queue_fraction: float = 0.5,
     ) -> None:
         self.registry = registry
         self.http = http
@@ -125,6 +168,13 @@ class Delegator:
         self.grace_s = grace_s
         self.ledger = ledger
         self.heartbeat = heartbeat
+        self.inflight = inflight or InFlight()
+        self.budgets = budgets
+        self.task_max_tokens = task_max_tokens
+        self.task_max_calls = task_max_calls
+        self._input_rounds: dict[str, int] = {}
+        self._usage_lookup = usage_lookup
+        self._contention_fraction = contention_queue_fraction
 
     async def run_subtask(
         self,
@@ -204,6 +254,8 @@ class Delegator:
         agent: AgentRecord,
         attempt: int,
         payload: BaseModel,
+        *,
+        bourse_kind: str = "task",
     ) -> tuple[DelegationRecord, dict[str, Any] | None, str, bool | None]:
         """Returns (row, output, detail, spot_check_passed); spot is None unless a
         contract-valid output was checked."""
@@ -223,6 +275,10 @@ class Delegator:
                 at=datetime.now(UTC),
             )
 
+        live = await self.registry.get_agent(agent.agent_id)
+        if live is None or live.state is not TrustState.ACTIVE:
+            return record(DelegationState.CANCELED_QUARANTINE, "quarantined"), None, "", None
+
         if agent.card_url is None:
             return record(DelegationState.ERROR, "no_card_url"), None, "", None
         try:
@@ -235,50 +291,165 @@ class Delegator:
             return record(DelegationState.CARD_DRIFT, "card_drift"), None, "", None
 
         task_id = f"{run_id}:{subtask.id}:{attempt}"
-        try:
-            async with deadline(self.deadline_s + self.grace_s):
-                result = await send_task(
-                    card,
-                    subtask.skill.value,
-                    payload.model_dump(mode="json"),
-                    task_id,
-                    self.deadline_s,
-                    self.http,
-                )
-        except DeadlineExceeded:
-            return record(DelegationState.TIMEOUT, "deadline"), None, "", None
-        except Exception as exc:  # transport and A2A client errors end this attempt only
-            return record(DelegationState.ERROR, type(exc).__name__), None, "", None
-
-        if result.state == "TASK_STATE_COMPLETED":
-            if result.output is None:
-                return record(DelegationState.FAILED_CONTRACT, "no_artifact"), None, "", None
+        if self.budgets is not None:
             try:
-                output = SKILL_IO[subtask.skill][1].model_validate(result.output)
-            except ValidationError:
-                return record(DelegationState.FAILED_CONTRACT, "invalid_output"), None, "", None
-            check = spot_check(subtask.skill, payload, output, task_id)
-            if not check.passed:
-                failed = record(DelegationState.FAILED_SPOTCHECK, "spotcheck")
-                return failed, None, check.detail, False
-            return record(DelegationState.COMPLETED, None), output.model_dump(mode="json"), "", True
-        state = _A2A_STATES.get(result.state)
-        if state is None:
-            kind = "stream_ended_" + result.state.removeprefix("TASK_STATE_").lower()
-            return record(DelegationState.ERROR, kind), None, result.error, None
-        kind = result.error_kind or (
-            "interrupted" if state is DelegationState.INTERRUPTED else state.value.lower()
-        )
-        return record(state, kind), None, result.error, None
+                await self.budgets.register(
+                    TaskBudget(
+                        task_id=task_id,
+                        max_tokens=self.task_max_tokens,
+                        max_calls=self.task_max_calls,
+                    )
+                )
+            except httpx.HTTPError:
+                return record(DelegationState.ERROR, "budget_register_failed"), None, "", None
+
+        handle: InFlightHandle | None = None
+
+        def on_task(a2a_id: str) -> None:
+            nonlocal handle
+            handle = InFlightHandle(agent.agent_id, card, a2a_id, self.http)
+            self.inflight.add(handle)
+
+        try:
+            try:
+                async with deadline(self.deadline_s + self.grace_s):
+                    result = await send_task(
+                        card,
+                        subtask.skill.value,
+                        payload.model_dump(mode="json"),
+                        task_id,
+                        self.deadline_s,
+                        self.http,
+                        on_task=on_task,
+                        bourse_kind=bourse_kind,
+                    )
+            except DeadlineExceeded:
+                if handle is not None:
+                    await self.inflight.cancel_agent(agent.agent_id)
+                return record(DelegationState.TIMEOUT, "deadline"), None, "", None
+            except Exception as exc:  # transport and A2A client errors end this attempt only
+                return record(DelegationState.ERROR, type(exc).__name__), None, "", None
+
+            live = await self.registry.get_agent(agent.agent_id)
+            if live is None or live.state is not TrustState.ACTIVE:
+                if handle is not None:
+                    await self.inflight.cancel_handle(handle)
+                return record(DelegationState.CANCELED_QUARANTINE, "quarantined"), None, "", None
+
+            if result.state == "TASK_STATE_INPUT_REQUIRED":
+                round_index = self._input_rounds.get(task_id, 0)
+                decision = evaluate_interrupt(
+                    data_parts=result.data_parts,
+                    text_parts=result.text_parts,
+                    extra_parts=result.extra_parts,
+                    payload=payload,
+                    round_index=round_index,
+                )
+                self._input_rounds[task_id] = round_index + 1
+                if decision.accepted:
+                    return record(DelegationState.INTERRUPTED, "input_required"), None, "", None
+                if handle is not None:
+                    await self.inflight.cancel_handle(handle)
+                await self._report(
+                    agent.agent_id,
+                    SESSION_SMUGGLING,
+                    Severity.SOFT,
+                    decision.detail or "INPUT_REQUIRED rejected",
+                )
+                return (
+                    record(DelegationState.SESSION_POLICY, "session_smuggling"),
+                    None,
+                    result.error,
+                    None,
+                )
+
+            if result.state == "TASK_STATE_COMPLETED":
+                if result.output is None:
+                    return record(DelegationState.FAILED_CONTRACT, "no_artifact"), None, "", None
+                try:
+                    output = SKILL_IO[subtask.skill][1].model_validate(result.output)
+                except ValidationError:
+                    return record(DelegationState.FAILED_CONTRACT, "invalid_output"), None, "", None
+                await self._check_misreport(agent.agent_id, task_id, result.artifact_metadata)
+                check = spot_check(subtask.skill, payload, output, task_id)
+                if not check.passed:
+                    await self._report(
+                        agent.agent_id,
+                        SPOTCHECK_FAIL,
+                        Severity.SOFT,
+                        check.detail or "spot check",
+                    )
+                    failed = record(DelegationState.FAILED_SPOTCHECK, "spotcheck")
+                    return failed, None, check.detail, False
+                dumped = output.model_dump(mode="json")
+                if await self._queue_contention(task_id):
+                    return (
+                        record(DelegationState.CONTENTION, "queue_wait"),
+                        dumped,
+                        "queue_wait_ms > fraction of deadline",
+                        True,
+                    )
+                return (record(DelegationState.COMPLETED, None), dumped, "", True)
+            state = _A2A_STATES.get(result.state)
+            if state is None:
+                kind = "stream_ended_" + result.state.removeprefix("TASK_STATE_").lower()
+                return record(DelegationState.ERROR, kind), None, result.error, None
+            kind = result.error_kind or (
+                "interrupted" if state is DelegationState.INTERRUPTED else state.value.lower()
+            )
+            return record(state, kind), None, result.error, None
+        finally:
+            if handle is not None:
+                self.inflight.remove(handle)
+
+    async def _report(self, agent_id: str, kind: str, severity: Severity, evidence: str) -> None:
+        try:
+            await self.registry.report_violation(
+                agent_id, ViolationReport(kind=kind, severity=severity, evidence=evidence)
+            )
+            live = await self.registry.get_agent(agent_id)
+            if live is not None and live.state is TrustState.QUARANTINED:
+                await self.inflight.cancel_agent(agent_id)
+        except httpx.HTTPError:
+            return
+
+    async def _queue_contention(self, task_id: str) -> bool:
+        if self._usage_lookup is None or self._contention_fraction <= 0:
+            return False
+        limit_ms = self.deadline_s * self._contention_fraction * 1000.0
+        rows = await self._usage_lookup(task_id)
+        return any(float(getattr(r, "queue_wait_ms", 0) or 0) > limit_ms for r in rows)
+
+    async def _check_misreport(self, agent_id: str, task_id: str, metadata: dict[str, Any]) -> None:
+        claimed_in = _as_int(metadata.get("tokens_in", metadata.get("tokensIn")))
+        claimed_out = _as_int(metadata.get("tokens_out", metadata.get("tokensOut")))
+        if claimed_in is None or claimed_out is None:
+            return
+        measured_in = 0
+        measured_out = 0
+        if self._usage_lookup is not None:
+            rows = await self._usage_lookup(task_id)
+            measured_in = sum(getattr(r, "tokens_in", 0) for r in rows)
+            measured_out = sum(getattr(r, "tokens_out", 0) for r in rows)
+        claimed = claimed_in + claimed_out
+        measured = measured_in + measured_out
+        if measured == 0:
+            mismatch = claimed > 0
+        else:
+            mismatch = abs(claimed - measured) / measured > MISREPORT_RATIO
+        if mismatch:
+            await self._report(
+                agent_id,
+                USAGE_MISREPORT,
+                Severity.SOFT,
+                f"claimed {claimed} tokens vs measured {measured} on {task_id}",
+            )
 
     async def _report_drift(self, agent: AgentRecord, live_digest: str) -> None:
         evidence = f"live card digest {live_digest} != registry digest {agent.current_digest}"
         # Best effort: a registry error must not stop the run from moving to the next agent.
         try:
-            await self.registry.report_violation(
-                agent.agent_id,
-                ViolationReport(kind=CARD_DRIFT, severity=Severity.SOFT, evidence=evidence),
-            )
+            await self._report(agent.agent_id, CARD_DRIFT, Severity.SOFT, evidence)
             await self.registry.refresh(agent.agent_id)
         except httpx.HTTPError:
             return

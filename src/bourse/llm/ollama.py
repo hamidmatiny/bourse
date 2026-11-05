@@ -15,10 +15,12 @@ from bourse.llm.base import (
     Sampling,
     ToolCall,
     ToolSpec,
+    UpstreamTimings,
     ollama_message,
     parse_arguments,
     tool_payload,
 )
+from bourse.llm.latency import timings_from_ollama
 from bourse.runtime.breaker import ProviderHTTPError
 from bourse.runtime.deadline import deadline
 
@@ -72,11 +74,15 @@ class OllamaProvider:
             "options": {"num_predict": max_tokens, "num_ctx": self._num_ctx},
         }
         if self._sampling is not None:
+            keep_alive = self._sampling.keep_alive
+        else:
+            keep_alive = get_settings().bourse_meter_keep_alive
+        body["keep_alive"] = keep_alive
+        if self._sampling is not None:
             body["options"].update(
                 temperature=self._sampling.temperature,
                 seed=self._sampling.seed,
             )
-            body["keep_alive"] = self._sampling.keep_alive
         if tools:
             body["tools"] = tool_payload(tools)
         return body
@@ -120,6 +126,7 @@ class OllamaProvider:
             tool_calls=calls,
             usage=usage,
             finish_reason=finish,
+            upstream=UpstreamTimings(**timings_from_ollama(data)),
         )
 
     async def aclose(self) -> None:

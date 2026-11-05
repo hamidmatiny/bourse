@@ -49,6 +49,7 @@ async def test_probe_records_501_and_resident_over_limit(tmp_path: Path) -> None
     assert report.resident_bytes >= RESIDENT_LIMIT_BYTES
     assert report.resident_ok is False
     assert all(b["think"] is False for b in chat_bodies)
+    assert all(b["keep_alive"] == "30m" for b in chat_bodies)
     assert written is not None
     assert written.parent == tmp_path
     assert written.name.startswith("probe-")

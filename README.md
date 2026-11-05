@@ -95,11 +95,14 @@ it lists.
 
 | Agent | Framework | Vendor | Skills | Model (via meter) |
 |---|---|---|---|---|
-| profiler | LangGraph | vendor-a.local | schema.profile, stats.compute | qwen3.5:4b |
+| profiler | LangGraph | vendor-a.local | schema.profile, stats.compute | qwen3.5:27b-q4_K_M |
 | pii_precise | CrewAI 1.6.1 | vendor-b.local | pii.detect | qwen3.5:27b-q4_K_M |
-| pii_fast | a2a-sdk | vendor-c.local | pii.detect | qwen3.5:4b |
-| normalizer | a2a-sdk | vendor-b.local | units.normalize | qwen3.5:4b |
+| pii_fast | a2a-sdk | vendor-c.local | pii.detect | qwen3.5:27b-q4_K_M |
+| normalizer | a2a-sdk | vendor-b.local | units.normalize | qwen3.5:27b-q4_K_M |
 | reporter | LangGraph | vendor-a.local | report.compose | qwen3.5:27b-q4_K_M |
+
+Roster models: ADR-0047 (single model; supersedes ADR-0021 model column). Diversity is
+framework + agent design + vendor; cost differences are measured in tokens.
 
 Numbers in agent outputs come from MCP tool results; the LLM only makes choices that a tool cannot,
 such as which columns hold person names. Structured output always uses a `submit` tool validated
@@ -113,7 +116,7 @@ by a Pydantic model (ADR-0019).
 | A1b | Attacker-signed card with interface URL on vendor A's domain | caught in Phase 1 (`DOMAIN_MISMATCH`) |
 | A2 | Signed card edited after signing (description, skill id, interface URL) | caught in Phase 1, 3/3 (`TAMPERED`) |
 | A3 | Vendor A's `kid` with `jku` pointing to the attacker's JWKS | caught in Phase 1 (`UNTRUSTED_JKU`) |
-| A4–A8 | Runtime adversaries | planned for Phase 5; not yet specified in this repo |
+| A4–A8 | Runtime adversaries | Phase 5b (`bourse attacks phase5`); see ADR-0042 |
 | A9 | Version rollback; same version re-published with changed content | caught in Phase 1, 2/2 (`VERSION_ROLLBACK`, `VERSION_REUSE`) |
 
 Reproduce the Phase 1 table: `uv run bourse attacks phase1`.
@@ -121,17 +124,13 @@ Reproduce the Phase 1 table: `uv run bourse attacks phase1`.
 ## Quickstart
 
 Requirements: macOS or Linux, [uv](https://docs.astral.sh/uv/), Docker, Ollama 0.40.6 on the host
-with `qwen3.5:4b` and `qwen3.5:27b-q4_K_M` pulled, started with
+with `qwen3.5:27b-q4_K_M` pulled (ADR-0047 single-model roster), started with
 `OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_NUM_PARALLEL=2 OLLAMA_FLASH_ATTENTION=1
-OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=4096`. Small model qwen3.5:4b: gemma4:12b on
-Ollama's MLX runner grew to about 16.7 GB and with qwen3.5:27b (15.5 GB) exceeded 26 GB, and
-Docker Desktop's memory limit must leave room for both models: Ollama 0.40.6
-refuses to load qwen3.5:27b (16.2 GiB predicted) when free system RAM is lower, and with
-Docker allowed all 48 GiB its VM held 33-36 GB (ADR-0038); a 12 GiB limit is used here. Every Ollama request also sends
-`options.num_ctx` from `BOURSE_NUM_CTX_BY_MODEL` (ADR-0038). Runs sample `/api/ps` every 5 s and abort if the resident total stays above
-26,000,000,000 bytes for 30 s. With both models loaded the probe measured
-23,993,702,388 resident bytes (limit 26 GB, AGENTS.md rule 9). `gitleaks` is needed only for the
-secret scan.
+OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=4096`. Every Ollama request sends
+`options.num_ctx` from `BOURSE_NUM_CTX_BY_MODEL` (ADR-0038). Runs sample `/api/ps` every 5 s and
+abort if the resident total stays above 26,000,000,000 bytes for 30 s; probe/stack warn if
+`/api/ps` shows models outside the roster. Model changes require an ADR with measured resident
+memory + exam n/N and operator approval. `gitleaks` is needed only for the secret scan.
 
 Compose mode (default; ADR-0034): agents run in containers on an internal network with vendor
 hostnames, no published ports, only their own vendor's key, and DNS egress to a sinkhole
@@ -147,11 +146,18 @@ uv run bourse probe
 docker compose build
 uv run bourse stack up --mode compose   # writes data/run/env/*.env, waits for health
 uv run bourse stack register            # vendors + 5 agents; exams start automatically
-uv run bourse stack wait-active         # until 5/5 ACTIVE via exam (max 600 s)
+uv run bourse stack wait-active         # until 5/5 ACTIVE (default: exam_timeout_s+120)
 docker compose --profile test run --rm egress-probe   # 2 attributed egress events
 docker compose run --rm broker bourse e2e all --repeat 3   # data/e2e/e2e-<utc>.json
 uv run bourse usage maxcall             # tokens per call per model; num_ctx rule (ADR-0038)
 uv run bourse stack down
+```
+
+Phase 5b acceptance (unit + db + adversaries only after honest ACTIVE + attacks):
+
+```sh
+bash scripts/acceptance_5b.sh
+# equivalent core step: uv run bourse stack up --mode compose --with-adversaries
 ```
 
 Host mode (`bourse stack up --mode host`) runs the same services as local processes on the
@@ -186,12 +192,16 @@ mode; agents never are):
   bit-reproducible even with temperature 0 and a fixed seed: in one replay through the meter, the
   same normalizer request ended in a valid submit in 2 of 3 runs.
 - The adversaries are written by the same author as the defenses.
-- No broker, ledger, reliability scores, trust runtime or OTel spans exist yet (phases 3–5).
+- Phase 5b A5 sleepers: in mixed roster, selection often does not expose them (acceptance
+  sole-provider rerun: mixed exposure A5a 1, A5b 2 → status not-exposed). Under sole-provider,
+  quiet sleeper A5b harmed 6 tasks over 10 e2e deliveries before canary quarantine
+  (`first_bad=2`, `detect_delay=8`). Canaries strike but are not counted in `exposure`
+  (ADR-0042; Phase 6 may change that).
 
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): hard rules and phase plan.
-- [docs/adr/](docs/adr/README.md): 38 architecture decision records.
+- [docs/adr/](docs/adr/README.md): architecture decision records (through ADR-0047).
 
 ## License
 

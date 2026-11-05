@@ -16,11 +16,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from opentelemetry import trace
 
-from bourse.contracts.metering import BudgetSpec, LlmUsageRecord
+from bourse.contracts.metering import BudgetSpec, LlmUsageRecord, TaskBudget
 from bourse.llm.base import ChatResult, Provider, Sampling
 from bourse.llm.ollama import OllamaProvider
 from bourse.llm.omniroute import OpenAICompatProvider
 from bourse.llm.router import AllProvidersFailed, Router
+from bourse.meter.budgets import BudgetStore
+from bourse.meter.fairshare import AgentGate, QueueTimeout, RateLimitUnsatisfiable
 from bourse.meter.keys import agent_for
 from bourse.meter.openai_wire import (
     WireError,
@@ -40,6 +42,11 @@ SEED_HEADER = "x-bourse-seed"
 METER_PORT = 55200
 
 
+BROKER_ID = "broker"
+TASK_BUDGET_EXCEEDED = "task_budget_exceeded"
+UNREGISTERED_TASK = "unregistered_task"
+
+
 @dataclass(frozen=True)
 class MeterConfig:
     max_tokens_per_call: int = 2048
@@ -51,6 +58,18 @@ class MeterConfig:
     sampling: Sampling = field(default_factory=Sampling)
     # Read-only /api/ps passthrough for the resident monitor (ADR-0033); None disables it.
     ollama_base_url: str | None = None
+    # Production (CLI) sets True: agents cannot invent task_ids (ADR-0041).
+    require_task_budget: bool = False
+    privileged_ids: frozenset[str] = field(default_factory=lambda: frozenset({BROKER_ID}))
+    # Fair share (ADR-0042 r2). Privileged (broker) callers skip the gate.
+    max_in_flight: int = 1
+    tokens_per_min: float = 60_000.0
+    # Worst-case prompt size for capacity check (set from settings / num_ctx).
+    max_prompt_tokens: int = 2048
+    # Hard cap on gate queue wait; must be < call deadline. Timeout -> CONTENTION.
+    queue_timeout_s: float = 60.0
+    # Global upstream slots = OLLAMA_NUM_PARALLEL (ADR-0044); wait counts in queue_wait_ms.
+    global_parallel: int = 1
 
 
 def with_sampling(provider: Provider, sampling: Sampling) -> Provider:
@@ -75,8 +94,36 @@ def create_meter_app(
 ) -> FastAPI:
     """`providers` maps each allowlisted model to its ordered provider chain."""
     cfg = config or MeterConfig()
+    min_capacity = cfg.max_tokens_per_call + cfg.max_prompt_tokens
+    if cfg.tokens_per_min < min_capacity:
+        raise ValueError(
+            f"bourse_meter_tokens_per_min={cfg.tokens_per_min} < "
+            f"max_tokens_per_call+max_prompt_tokens={min_capacity}; "
+            "bucket can never satisfy one call (would queue forever)"
+        )
+    if cfg.queue_timeout_s <= 0:
+        raise ValueError(f"queue_timeout_s={cfg.queue_timeout_s} must be > 0")
+    # Always strictly below the call deadline (clamp when tests use a short deadline_s).
+    queue_timeout_s = min(cfg.queue_timeout_s, max(cfg.deadline_s * 0.9, 0.05))
+    store = BudgetStore()
+    gate = AgentGate(
+        max_in_flight=cfg.max_in_flight,
+        tokens_per_min=cfg.tokens_per_min,
+        queue_timeout_s=queue_timeout_s,
+        global_parallel=cfg.global_parallel,
+    )
     app = FastAPI(title="BOURSE metering proxy", version="0.1.0")
     app.add_middleware(TraceMiddleware, span_name="llm call")
+
+    @app.post("/budgets")
+    async def register_budget(request: Request, body: TaskBudget) -> Response:
+        found = agent_for(request.headers.get("authorization"), keys)
+        if found is None:
+            return JSONResponse(error_body("unknown or missing agent key", "unauthorized"), 401)
+        if found not in cfg.privileged_ids:
+            return JSONResponse(error_body("broker key required", "forbidden"), 403)
+        store.put(body)
+        return JSONResponse(body.model_dump(mode="json"), 201)
 
     @app.get("/ollama/api/ps")
     async def ollama_ps(request: Request) -> Response:
@@ -97,6 +144,8 @@ def create_meter_app(
         task_id = request.headers.get(TASK_HEADER)
         started = time.monotonic()
         model = ""
+        queue_wait_ms = 0.0
+        held = False
 
         async def record(
             status: int, error_kind: str | None, result: ChatResult | None = None
@@ -108,6 +157,8 @@ def create_meter_app(
             span.set_attribute("tokens_in", result.usage.tokens_in if result else 0)
             span.set_attribute("tokens_out", result.usage.tokens_out if result else 0)
             span.set_attribute("outcome", error_kind or "ok")
+            span.set_attribute("queue_wait_ms", queue_wait_ms)
+            up = result.upstream if result is not None else None
             await repo.add_usage(
                 LlmUsageRecord(
                     agent_id=agent_id,
@@ -120,6 +171,12 @@ def create_meter_app(
                     status=status,
                     error_kind=error_kind,
                     at=clock(),
+                    queue_wait_ms=queue_wait_ms,
+                    total_duration_ms=None if up is None else up.total_duration_ms,
+                    load_duration_ms=None if up is None else up.load_duration_ms,
+                    prompt_eval_duration_ms=None if up is None else up.prompt_eval_duration_ms,
+                    eval_duration_ms=None if up is None else up.eval_duration_ms,
+                    reload=False if up is None else up.reload,
                 )
             )
 
@@ -140,6 +197,24 @@ def create_meter_app(
         if parsed.model not in providers:
             return await fail(400, "model_not_allowed", f"model {parsed.model!r} is not allowed")
 
+        privileged = agent_id in cfg.privileged_ids
+        if cfg.require_task_budget and not privileged:
+            if not task_id or store.get(task_id) is None:
+                return await fail(403, UNREGISTERED_TASK, "unregistered task_id")
+            requested = parsed.max_tokens or cfg.max_tokens_per_call
+            if store.would_exceed(task_id, requested):
+                await record(429, "BUDGET")
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": "task budget exceeded",
+                            "type": "BUDGET",
+                            "code": TASK_BUDGET_EXCEEDED,
+                        }
+                    },
+                    429,
+                )
+
         sampling = cfg.sampling
         raw_seed = request.headers.get(SEED_HEADER)
         if raw_seed is not None:
@@ -153,25 +228,40 @@ def create_meter_app(
             wall_budget_s=cfg.deadline_s,
         )
         router = Router(chain, BudgetLedger(spec, run_id=agent_id), breaker)
+        requested = parsed.max_tokens or cfg.max_tokens_per_call
+        if not privileged:
+            try:
+                queue_wait_ms = await gate.acquire(agent_id, requested)
+                held = True
+            except RateLimitUnsatisfiable as exc:
+                return await fail(429, "rate_limit_unsatisfiable", str(exc))
+            except QueueTimeout as exc:
+                return await fail(429, "contention", str(exc))
         try:
-            result = await router.chat(
-                parsed.messages,
-                parsed.tools,
-                parsed.max_tokens or cfg.max_tokens_per_call,
-                cfg.deadline_s,
-            )
-        except BreakerOpen as exc:
-            return await fail(503, "breaker_open", str(exc))
-        except DeadlineExceeded as exc:
-            return await fail(504, "deadline", str(exc))
-        except AllProvidersFailed as exc:
-            return await fail(502, "upstream_failed", str(exc))
-        except (ProviderHTTPError, httpx.HTTPError) as exc:
-            return await fail(502, "upstream_error", str(exc))
-        except BudgetExceeded as exc:
-            return await fail(429, "budget", str(exc))
+            try:
+                result = await router.chat(
+                    parsed.messages,
+                    parsed.tools,
+                    requested,
+                    cfg.deadline_s,
+                )
+            except BreakerOpen as exc:
+                return await fail(503, "breaker_open", str(exc))
+            except DeadlineExceeded as exc:
+                return await fail(504, "deadline", str(exc))
+            except AllProvidersFailed as exc:
+                return await fail(502, "upstream_failed", str(exc))
+            except (ProviderHTTPError, httpx.HTTPError) as exc:
+                return await fail(502, "upstream_error", str(exc))
+            except BudgetExceeded as exc:
+                return await fail(429, "budget", str(exc))
+        finally:
+            if held:
+                gate.release(agent_id)
 
         await record(200, None, result)
+        if task_id and store.get(task_id) is not None:
+            store.record(task_id, result.usage.tokens_in + result.usage.tokens_out)
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(clock().timestamp())
         if parsed.stream:

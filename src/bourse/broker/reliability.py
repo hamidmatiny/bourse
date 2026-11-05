@@ -2,9 +2,10 @@
 
 Per (agent_id, skill, agent_major):
 - s = attempts that COMPLETED with a contract-valid output that passed the spot check;
-- f = every other recorded attempt (FAILED, REJECTED, FAILED_CONTRACT, FAILED_SPOTCHECK,
-  TIMEOUT, INTERRUPTED, CARD_DRIFT, ERROR). Broker-side aborts never write a ledger row, so
-  they are excluded by construction.
+- f = every other recorded attempt except CONTENTION (FAILED, REJECTED, FAILED_CONTRACT,
+  FAILED_SPOTCHECK, TIMEOUT, INTERRUPTED, CARD_DRIFT, ERROR). CONTENTION is excluded from
+  both s and f. Broker-side aborts never write a ledger row, so they are excluded by
+  construction.
 - score = Wilson 95% lower bound of s / (s + f); a new major version starts a fresh counter.
 Cost and latency = EWMA of shadow_usd and wall_ms over the same rows, oldest first.
 """
@@ -55,14 +56,15 @@ class AgentStats:
 
 
 def agent_stats(rows: Sequence[LedgerRow], alpha: float) -> AgentStats:
-    s = sum(succeeded(r) for r in rows)
-    f = len(rows) - s
+    scored = [r for r in rows if r.state is not DelegationState.CONTENTION]
+    s = sum(succeeded(r) for r in scored)
+    f = len(scored) - s
     return AgentStats(
         s=s,
         f=f,
         wilson_lb=wilson_lower_bound(s, f),
-        ewma_usd=ewma((r.shadow_usd for r in rows), alpha),
-        ewma_wall_ms=ewma((r.wall_ms for r in rows), alpha),
+        ewma_usd=ewma((r.shadow_usd for r in scored), alpha),
+        ewma_wall_ms=ewma((r.wall_ms for r in scored), alpha),
     )
 
 

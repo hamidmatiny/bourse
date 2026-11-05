@@ -17,6 +17,7 @@ import anyio.lowlevel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
+from bourse.broker.abort import normalize_abort_reason
 from bourse.broker.delegate import Delegator, RegistryClient, RunAborted, build_input
 from bourse.broker.planner import PlanResult, make_plan
 from bourse.broker.repo import RunRepository
@@ -154,7 +155,7 @@ class Broker:
         }
         if self.breaker.tripped:
             update["status"] = RunStatus.ABORTED.value
-            update["abort_reason"] = self.breaker.reason
+            update["abort_reason"] = normalize_abort_reason(self.breaker.reason)
         return update
 
     async def _schedule(self, state: RunState) -> RunState:
@@ -198,7 +199,7 @@ class Broker:
         update: RunState = {"results": merged, "level": state["level"] + 1}
         if aborted is not None:
             update["status"] = RunStatus.ABORTED.value
-            update["abort_reason"] = aborted
+            update["abort_reason"] = normalize_abort_reason(aborted)
         return update
 
     async def _run_subtask(
@@ -219,7 +220,9 @@ class Broker:
                 error_kind=f"dependency_not_completed:{','.join(sorted(blocked))}",
             )
         if self.breaker.tripped:
-            raise RunAborted(self.breaker.reason or "breaker open")
+            raise RunAborted(
+                normalize_abort_reason(self.breaker.reason) or "BREAKER: open"
+            )
         upstream: dict[SkillId, dict[str, Any]] = {}
         for aid in ancestors(dag, sub.id):
             output = done[aid].output
@@ -255,7 +258,9 @@ class Broker:
                     if r.subtask_id == sub.id
                 }
                 for agent_id in sorted(tried):
-                    await self.canaries.after_delegation(agents[agent_id], sub.skill)
+                    record = agents.get(agent_id)
+                    if record is not None:
+                        await self.canaries.after_delegation(record, sub.skill)
             if result.agent_id:
                 span.set_attribute("agent_id", result.agent_id)
             return result
@@ -274,16 +279,23 @@ class Broker:
         return {"status": (RunStatus.SUCCEEDED if ok else RunStatus.FAILED).value}
 
     async def _persist(self, state: RunState) -> RunState:
-        await self._finish(state["run_id"], RunStatus(state["status"]))
+        await self._finish(
+            state["run_id"],
+            RunStatus(state["status"]),
+            abort_reason=state.get("abort_reason"),
+        )
         return {}
 
-    async def _finish(self, run_id: str, status: RunStatus) -> None:
+    async def _finish(
+        self, run_id: str, status: RunStatus, abort_reason: str | None = None
+    ) -> None:
         run = await self.runs.get_run(run_id)
         if run is None:
             return
         ended = datetime.now(UTC)
         wall_ms = (ended - run.started_at).total_seconds() * 1000
-        await self.runs.finish_run(run_id, status, ended, wall_ms)
+        reason = normalize_abort_reason(abort_reason) if status is RunStatus.ABORTED else None
+        await self.runs.finish_run(run_id, status, ended, wall_ms, abort_reason=reason)
 
     # --- graph ---------------------------------------------------------------------------------
 
@@ -350,9 +362,10 @@ class Broker:
         snapshot = await graph.aget_state(_config(run_id))
         state: RunState = snapshot.values
         if scope.cancelled_caught:
-            await self._finish(run_id, RunStatus.ABORTED)
-            state = {**state, "status": RunStatus.ABORTED.value}
-            state["abort_reason"] = f"watchdog: {kill_reason[0] if kill_reason else 'killed'}"
+            raw = kill_reason[0] if kill_reason else "killed"
+            reason = normalize_abort_reason(raw) or f"WATCHDOG: {raw}"
+            await self._finish(run_id, RunStatus.ABORTED, abort_reason=reason)
+            state = {**state, "status": RunStatus.ABORTED.value, "abort_reason": reason}
         return await self.report(run_id, state, trace_id)
 
     async def report(
@@ -379,7 +392,7 @@ class Broker:
             tokens_in=sum(u.tokens_in for u in usage),
             tokens_out=sum(u.tokens_out for u in usage),
             wall_ms=(run.wall_ms or 0.0) if run is not None else 0.0,
-            abort_reason=state.get("abort_reason"),
+            abort_reason=normalize_abort_reason(state.get("abort_reason")),
             trace_id=trace_id,
         )
 

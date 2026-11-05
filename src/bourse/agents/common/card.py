@@ -1,6 +1,7 @@
 """Agent Card built from the spec and signed with the vendor key (Phase 1 card_sign)."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentProvider, AgentSkill
@@ -24,7 +25,12 @@ def vendor_jwks_url(vendor_domain: str) -> str:
     return f"https://{vendor_domain}/.well-known/jwks.json"
 
 
-def build_card(spec: AgentSpec, base_url: str) -> AgentCard:
+def build_card(
+    spec: AgentSpec,
+    base_url: str,
+    skill_descriptions: Mapping[SkillId, str] | None = None,
+) -> AgentCard:
+    extra = skill_descriptions or {}
     return AgentCard(
         name=spec.display_name,
         description=spec.description,
@@ -40,7 +46,10 @@ def build_card(spec: AgentSpec, base_url: str) -> AgentCard:
         default_output_modes=["application/json"],
         skills=[
             AgentSkill(
-                id=s.value, name=s.value, description=SKILL_TEXT[s][0], tags=SKILL_TEXT[s][1]
+                id=s.value,
+                name=s.value,
+                description=extra.get(s, SKILL_TEXT[s][0]),
+                tags=SKILL_TEXT[s][1],
             )
             for s in spec.skills
         ],

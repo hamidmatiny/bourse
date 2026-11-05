@@ -169,6 +169,14 @@ class StateChangeRequest(BaseModel):
     approval: ApprovalDecision | None = None
 
 
+class AvailabilityRequest(BaseModel):
+    """Selection gate only (ADR-0042). Does not change TrustState."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    available: bool
+
+
 class ApiError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

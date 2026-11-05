@@ -26,7 +26,14 @@ pytestmark = pytest.mark.db
 
 URL = get_settings().bourse_database_url
 ROOT = Path(__file__).resolve().parents[2]
-TABLES = {"vendors", "agents", "card_revisions", "violations", "state_transitions"}
+TABLES = {
+    "vendors",
+    "agents",
+    "card_revisions",
+    "violations",
+    "state_transitions",
+    "violation_aggregates",
+}
 PROFILER_ID = "vendor-a-schema-profiler@vendor-a.local"
 
 
@@ -170,5 +177,12 @@ async def test_transitions_write_audit_rows(repo: SqlRepository) -> None:
         with pytest.raises(DBAPIError, match="append-only"):
             async with engine.begin() as conn:
                 await conn.execute(text("DELETE FROM state_transitions"))
+        # violation_aggregates is updatable (ADR-0043); not append-only.
+        hour = datetime(2026, 11, 1, tzinfo=UTC)
+        n1 = await repo.bump_aggregate("vendor-x.local", hour, "TAMPERED")
+        n2 = await repo.bump_aggregate("vendor-x.local", hour, "TAMPERED")
+        assert (n1, n2) == (1, 2)
+        async with engine.begin() as conn:
+            await conn.execute(text("UPDATE violation_aggregates SET count = count + 1"))
     finally:
         await engine.dispose()

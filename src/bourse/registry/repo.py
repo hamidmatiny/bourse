@@ -1,5 +1,6 @@
 """Repository protocol (ADR-0014). Writes that must be atomic are single methods."""
 
+from datetime import datetime
 from typing import Protocol
 
 from bourse.contracts.registry import AgentRecord, CardRevision, StateTransition, Vendor
@@ -31,6 +32,12 @@ class Repository(Protocol):
         ...
 
     async def add_violation(self, violation: Violation) -> None: ...
+
+    async def bump_aggregate(self, vendor_domain: str, hour: datetime, kind: str) -> int:
+        """Increment the per-vendor-hour counter; returns the new count."""
+        ...
+
+    async def get_aggregate(self, vendor_domain: str, hour: datetime) -> int: ...
 
     async def list_violations(self, agent_id: str) -> list[Violation]: ...
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from bourse.agents.catalog import agent_specs
 from bourse.agents.pii_precise.isolation import CREWAI_ENV
+from bourse.config import get_settings
 from bourse.mcp_servers.common import SERVER_PORTS
 from bourse.registry.service import make_agent_id
 
@@ -49,6 +50,56 @@ class Node:
 
 def agent_hostname(name: str, vendor_domain: str) -> str:
     return f"{name.replace('_', '-')}.{vendor_domain}"
+
+
+def adversary_nodes() -> list[Node]:
+    from bourse.adversaries.catalog import (
+        ADVERSARIES,
+        CARD_ATTACKS_NAME,
+        VENDOR,
+        adversary_specs,
+    )
+
+    specs = adversary_specs("small")
+    out: list[Node] = []
+    for i, adv in enumerate(ADVERSARIES):
+        spec = specs[adv.name]
+        host = agent_hostname(adv.name, VENDOR)
+        out.append(
+            Node(
+                name=f"agent-{adv.name}",
+                ip=PREFIX + str(80 + i),
+                identity=make_agent_id(spec.display_name, VENDOR),
+                command=["bourse", "adversary", "serve", adv.name],
+                aliases=(host,),
+                egress_dns=True,
+                volumes=(f"./data/keys/{VENDOR}:/app/data/keys/{VENDOR}:ro",),
+                profile="adversaries",
+                agent=adv.name,
+                vendor=VENDOR,
+                port=spec.port,
+                health_url=f"http://127.0.0.1:{spec.port}/.well-known/agent-card.json",
+            )
+        )
+    from bourse.adversaries.catalog import ATTACK_CARD_HOSTS
+
+    # Host aliases so registry can fetch each attack at /.well-known/agent-card.json.
+    attack_hosts = tuple(f"{p}.{VENDOR}" for p in ATTACK_CARD_HOSTS)
+    out.append(
+        Node(
+            name=CARD_ATTACKS_NAME,
+            ip=PREFIX + str(80 + len(ADVERSARIES)),
+            identity=CARD_ATTACKS_NAME,
+            command=["bourse", "adversary", "serve", CARD_ATTACKS_NAME],
+            aliases=(agent_hostname("card-attacks", VENDOR), *attack_hosts),
+            egress_dns=True,
+            volumes=(f"./data/keys/{VENDOR}:/app/data/keys/{VENDOR}:ro",),
+            profile="adversaries",
+            port=55520,
+            health_url="http://127.0.0.1:55520/.well-known/agent-card.json",
+        )
+    )
+    return out
 
 
 def agent_nodes() -> list[Node]:
@@ -126,12 +177,19 @@ def nodes() -> list[Node]:
             command=[
                 "sh",
                 "-c",
+                # Brace group: write conf fully, THEN background dns-watch and exec dnsmasq.
+                # Without braces, `A && B && C & exec D` backgrounds the whole AND-list so
+                # dnsmasq can start on a truncated conf (reads /etc/resolv.conf, no sinkhole).
                 "bourse egress dnsmasq-config > /tmp/dnsmasq.conf"
-                " && exec dnsmasq --keep-in-foreground --conf-file=/tmp/dnsmasq.conf",
+                " && touch /tmp/dnsmasq.query.log"
+                " && { bourse egress dns-watch /tmp/dnsmasq.query.log &"
+                " exec dnsmasq --conf-file=/tmp/dnsmasq.conf --keep-in-foreground"
+                " --log-queries --log-facility=/tmp/dnsmasq.query.log; }",
             ],
         ),
         Node("sinkhole", SINKHOLE_IP, "sinkhole", command=["bourse", "egress", "sinkhole"]),
         *agent_nodes(),
+        *adversary_nodes(),
         Node(
             "broker",
             PREFIX + "60",
@@ -181,6 +239,7 @@ def dnsmasq_conf() -> str:
         "no-hosts",
         "log-queries",
         f"listen-address={EGRESS_DNS_IP}",
+        "listen-address=127.0.0.1",  # healthcheck queries localhost:53
         "bind-interfaces",
     ]
     lines += [f"server=/{name}/127.0.0.11" for name in allowlisted_names()]
@@ -235,6 +294,21 @@ def _bourse_service(n: Node) -> dict[str, Any]:
         svc["extra_hosts"] = ["host.docker.internal:host-gateway"]
     if n.name == "egress-dns":
         svc["user"] = "root"  # dnsmasq binds port 53
+        svc["healthcheck"] = {
+            "test": [
+                "CMD",
+                "python",
+                "-c",
+                (
+                    "from bourse.egress.dns_log import dns_health_ok; "
+                    "raise SystemExit(0 if dns_health_ok() is None else 1)"
+                ),
+            ],
+            "interval": "5s",
+            "timeout": "10s",
+            "retries": 12,
+            "start_period": "5s",
+        }
     if n.name == "sinkhole":
         svc["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}  # 80/443 as non-root
     if n.agent is not None:
@@ -244,7 +318,7 @@ def _bourse_service(n: Node) -> dict[str, Any]:
             **{f"mcp-{m}": {"condition": "service_healthy"} for m in SERVER_PORTS},
         }
     if n.name in ("broker", "egress-probe"):
-        svc["depends_on"] = {"egress-dns": {"condition": "service_started"}}
+        svc["depends_on"] = {"egress-dns": {"condition": "service_healthy"}}
     return svc
 
 
@@ -302,8 +376,19 @@ COMPOSE_HEADER = (
 )
 
 
-def env_files(secrets: dict[str, Any], *, model_large: str, model_small: str) -> dict[str, str]:
-    """Per-service env files for compose mode (written under data/run/env, never committed)."""
+def env_files(
+    secrets: dict[str, Any],
+    *,
+    model_large: str,
+    model_small: str,
+    ollama_num_parallel: int = 2,
+    exam_deadline_by_model: str = "",
+) -> dict[str, str]:
+    """Per-service env files for compose mode (written under data/run/env, never committed).
+
+    `exam_deadline_by_model` is `model=seconds,...` from probe --latency (3*p95), embedded so
+    the registry container does not need a host bind of data/probe.
+    """
     keys = secrets["meter_keys"]
     all_keys = ",".join(f"{a}:{k}" for a, k in keys.items())
     db = f"postgresql+psycopg://bourse:bourse@postgres:5432/{COMPOSE_DB}"
@@ -316,28 +401,46 @@ def env_files(secrets: dict[str, Any], *, model_large: str, model_small: str) ->
         "BOURSE_MCP_URL_TEMPLATE": "http://mcp-{name}:{port}/mcp",
         "BOURSE_MODEL_LARGE": model_large,
         "BOURSE_MODEL_SMALL": model_small,
+        "BOURSE_AGENT_LLM_TIMEOUT_S": str(get_settings().bourse_agent_llm_timeout_s),
+        "BOURSE_METER_DEADLINE_S": str(get_settings().bourse_meter_deadline_s),
+        "BOURSE_EXAM_DEADLINE_S": str(get_settings().bourse_exam_deadline_s),
+        "BOURSE_EXAM_TIMEOUT_S": str(get_settings().bourse_exam_timeout_s),
         "BOURSE_DEV_HOSTS": "",
+        "OLLAMA_NUM_PARALLEL": str(ollama_num_parallel),
     }
     out: dict[str, dict[str, str]] = {n.name: dict(common) for n in nodes() if n.command}
-    out["registry"] |= {
+    registry_extra = {
         "BOURSE_ADMIN_TOKEN": secrets["admin_token"],
         "BOURSE_HONEYTOKEN_SECRET": secrets["honeytoken_secret"],
+        # Broker meter key: admission exams POST /budgets before each task (ADR-0041).
+        "BOURSE_AGENT_KEY": keys["broker"],
     }
+    if exam_deadline_by_model:
+        registry_extra["BOURSE_EXAM_DEADLINE_BY_MODEL"] = exam_deadline_by_model
+    out["registry"] |= registry_extra
     out["meter"] |= {
         "BOURSE_METER_KEYS": all_keys,
         "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+        "OLLAMA_NUM_PARALLEL": str(ollama_num_parallel),
     }
     for m in SERVER_PORTS:
         out[f"mcp-{m}"] |= {"BOURSE_METER_KEYS": all_keys}
     out["sinkhole"] |= {"BOURSE_ADMIN_TOKEN": secrets["admin_token"]}
+    if "egress-dns" in out:
+        out["egress-dns"] |= {"BOURSE_ADMIN_TOKEN": secrets["admin_token"]}
     out["broker"] |= {
         "BOURSE_ADMIN_TOKEN": secrets["admin_token"],
         "BOURSE_HONEYTOKEN_SECRET": secrets["honeytoken_secret"],
         "BOURSE_OLLAMA_PS_URL": f"http://meter:{METER_PORT}/ollama/api/ps",
         "BOURSE_OLLAMA_PS_KEY": keys["broker"],
     }
-    for n in agent_nodes():
-        assert n.agent is not None
+    for n in [*agent_nodes(), *adversary_nodes()]:
+        if n.agent is None:
+            if n.name == "card-attacks":
+                out[n.name] = out[n.name] | {
+                    "BOURSE_AGENT_BASE_URL": f"http://{n.aliases[0]}:{n.port}",
+                }
+            continue
         env = out[n.name] | {
             "BOURSE_AGENT_KEY": keys[n.agent],
             "BOURSE_AGENT_BASE_URL": f"http://{n.aliases[0]}:{n.port}",

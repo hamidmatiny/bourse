@@ -34,6 +34,7 @@ runs = Table(
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("ended_at", DateTime(timezone=True)),
     Column("wall_ms", Float),
+    Column("abort_reason", Text),
 )
 
 delegations = Table(
@@ -65,14 +66,22 @@ class SqlRunRepository:
             await conn.execute(insert(runs).values(**values))
 
     async def finish_run(
-        self, run_id: str, status: RunStatus, ended_at: datetime, wall_ms: float
+        self,
+        run_id: str,
+        status: RunStatus,
+        ended_at: datetime,
+        wall_ms: float,
+        abort_reason: str | None = None,
     ) -> None:
+        values: dict[str, object] = {
+            "status": status.value,
+            "ended_at": ended_at,
+            "wall_ms": wall_ms,
+        }
+        if abort_reason is not None:
+            values["abort_reason"] = abort_reason
         async with self._engine.begin() as conn:
-            await conn.execute(
-                update(runs)
-                .where(runs.c.run_id == run_id)
-                .values(status=status.value, ended_at=ended_at, wall_ms=wall_ms)
-            )
+            await conn.execute(update(runs).where(runs.c.run_id == run_id).values(**values))
 
     async def get_run(self, run_id: str) -> RunRecord | None:
         async with self._engine.connect() as conn:

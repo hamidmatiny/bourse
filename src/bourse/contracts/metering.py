@@ -27,6 +27,16 @@ class LedgerEntry(BaseModel):
     at: datetime
 
 
+class TaskBudget(BaseModel):
+    """Per-delegation ceiling registered by the broker before send (ADR-0041)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str = Field(min_length=1, max_length=200)
+    max_tokens: int = Field(gt=0)
+    max_calls: int = Field(gt=0)
+
+
 class BudgetSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -67,6 +77,14 @@ class LlmUsageRecord(BaseModel):
     status: int
     error_kind: str | None
     at: datetime
+    # Fair-share + global OLLAMA_NUM_PARALLEL gate wait (ADR-0042 r2 / ADR-0044).
+    queue_wait_ms: float = Field(default=0.0, ge=0)
+    # Upstream Ollama timings (ns→ms); null when the call failed before a body.
+    total_duration_ms: float | None = None
+    load_duration_ms: float | None = None
+    prompt_eval_duration_ms: float | None = None
+    eval_duration_ms: float | None = None
+    reload: bool = False  # load_duration_ms > 1000
 
 
 class ToolUsageRecord(BaseModel):

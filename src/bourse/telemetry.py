@@ -23,8 +23,12 @@ TRACER_NAME = "bourse"
 
 
 def setup_tracing(service_name: str, endpoint: str) -> TracerProvider | None:
+    """Install a TracerProvider once per process. Re-entry returns the existing provider."""
     if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
         return None
+    existing = trace.get_tracer_provider()
+    if isinstance(existing, TracerProvider):
+        return existing
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))

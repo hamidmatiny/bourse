@@ -23,6 +23,7 @@ from tests.broker_harness import (
     FakeAgent,
     Outcome,
     complete,
+    good_output,
     intake,
     one_agent_per_skill,
     plan_response,
@@ -169,6 +170,33 @@ async def test_sentinel_card_text_never_reaches_llm(bed_factory: list[BrokerBed]
     assert sentinel in json.dumps(stored[0].card)
     assert bed.meter_bodies, "planner made no LLM call"
     assert sum(sentinel in body for body in bed.meter_bodies) == 0
+
+
+async def test_sentinel_in_agent_status_artifact_error_never_reaches_llm(
+    bed_factory: list[BrokerBed],
+) -> None:
+    sentinel = "SENTINEL-status-artifact-error-ZZZ"
+    cases: list[tuple[str, Outcome]] = [
+        ("fail", Outcome(kind="fail", error_kind="internal", detail=sentinel)),
+        ("input_required", Outcome(kind="input_required", detail=sentinel)),
+        (
+            "artifact",
+            Outcome(
+                output=good_output(SkillId.SCHEMA_PROFILE),
+                artifact_text=sentinel,
+            ),
+        ),
+    ]
+    for _label, outcome in cases:
+        agents = one_agent_per_skill()
+
+        async def emit(_req: ParsedRequest, captured: Outcome = outcome) -> Outcome:
+            return captured
+
+        agents[0].behaviour = emit
+        bed = await make_bed(bed_factory, agents)
+        await bed.broker().start(intake())
+        assert sum(sentinel in body for body in bed.meter_bodies) == 0
 
 
 # --- selector --------------------------------------------------------------------------------
@@ -331,7 +359,8 @@ async def test_input_required_is_interrupted(bed_factory: list[BrokerBed]) -> No
     bed = await make_bed(bed_factory, agents)
     report = await bed.broker().start(intake())
     units = [d for d in report.delegations if d.subtask_id == "units"]
-    assert [d.state for d in units] == [DelegationState.INTERRUPTED]
+    assert [d.state for d in units] == [DelegationState.SESSION_POLICY]
+    assert [d.error_kind for d in units] == ["session_smuggling"]
 
 
 async def test_delegation_deadline(bed_factory: list[BrokerBed]) -> None:
@@ -472,3 +501,19 @@ async def test_rerun_level_continues_attempt_numbers(bed_factory: list[BrokerBed
     assert pii == [("a-pii@vendor-x.local", 1), ("b-pii@vendor-y.local", 2)]
     assert not bed.executors["a-pii"].requests
     assert bed.executors["b-pii"].requests[0].task_id == "run-mid:pii:2"
+
+
+async def test_usage_misreport_records_soft_violation(bed_factory: list[BrokerBed]) -> None:
+    agents = one_agent_per_skill()
+
+    async def overclaim(req: ParsedRequest) -> Outcome:
+        out = await complete(req)
+        out.artifact_metadata = {"tokens_in": 100_000, "tokens_out": 100_000}
+        return out
+
+    agents[0].behaviour = overclaim
+    bed = await make_bed(bed_factory, agents)
+    report = await bed.broker().start(intake())
+    assert report.status is RunStatus.SUCCEEDED
+    vios = await bed.registry_service.repo.list_violations(agents[0].agent_id)
+    assert any(v.kind == "USAGE_MISREPORT" and v.severity is Severity.SOFT for v in vios)

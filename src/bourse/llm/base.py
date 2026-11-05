@@ -48,6 +48,18 @@ class ChatMessage(BaseModel):
     tool_name: str | None = None  # tool turns (Ollama wire format)
 
 
+class UpstreamTimings(BaseModel):
+    """Ollama /api/chat duration fields (milliseconds) + reload classification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    total_duration_ms: float | None = None
+    load_duration_ms: float | None = None
+    prompt_eval_duration_ms: float | None = None
+    eval_duration_ms: float | None = None
+    reload: bool = False
+
+
 class ChatResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -56,6 +68,7 @@ class ChatResult(BaseModel):
     usage: Usage
     usd: Decimal = Field(default=Decimal(0), ge=0)
     finish_reason: FinishReason = "stop"
+    upstream: UpstreamTimings | None = None
 
 
 class Provider(Protocol):

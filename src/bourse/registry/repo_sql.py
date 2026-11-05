@@ -6,6 +6,7 @@ Search: skills array containment + full-text search over agent name and skill ta
 (`search_text`), never over descriptions.
 """
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -17,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Index,
+    Integer,
     MetaData,
     Table,
     Text,
@@ -100,6 +102,15 @@ violations = Table(
     Column("severity", Text, nullable=False),
     Column("evidence", Text, nullable=False),
     Column("at", TS, nullable=False),
+)
+
+violation_aggregates = Table(
+    "violation_aggregates",
+    metadata,
+    Column("vendor_domain", Text, primary_key=True),
+    Column("hour", TS, primary_key=True),
+    Column("kind", Text, primary_key=True),
+    Column("count", Integer, nullable=False),
 )
 
 state_transitions = Table(
@@ -247,6 +258,26 @@ class SqlRepository:
                     at=violation.at,
                 )
             )
+
+    async def bump_aggregate(self, vendor_domain: str, hour: datetime, kind: str) -> int:
+        stmt = insert(violation_aggregates).values(
+            vendor_domain=vendor_domain, hour=hour, kind=kind, count=1
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["vendor_domain", "hour", "kind"],
+            set_={"count": violation_aggregates.c.count + 1},
+        ).returning(violation_aggregates.c.count)
+        async with self._engine.begin() as conn:
+            count = (await conn.execute(stmt)).scalar_one()
+        return int(count)
+
+    async def get_aggregate(self, vendor_domain: str, hour: datetime) -> int:
+        stmt = select(func.coalesce(func.sum(violation_aggregates.c.count), 0)).where(
+            violation_aggregates.c.vendor_domain == vendor_domain,
+            violation_aggregates.c.hour == hour,
+        )
+        async with self._engine.connect() as conn:
+            return int((await conn.execute(stmt)).scalar_one())
 
     async def list_violations(self, agent_id: str) -> list[Violation]:
         stmt = select(violations).where(violations.c.agent_id == agent_id).order_by(violations.c.id)

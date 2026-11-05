@@ -239,7 +239,9 @@ services:
     command:
     - sh
     - -c
-    - bourse egress dnsmasq-config > /tmp/dnsmasq.conf && exec dnsmasq --keep-in-foreground --conf-file=/tmp/dnsmasq.conf
+    - bourse egress dnsmasq-config > /tmp/dnsmasq.conf && touch /tmp/dnsmasq.query.log && { bourse egress
+      dns-watch /tmp/dnsmasq.query.log & exec dnsmasq --conf-file=/tmp/dnsmasq.conf --keep-in-foreground
+      --log-queries --log-facility=/tmp/dnsmasq.query.log; }
     env_file:
     - path: data/run/env/egress-dns.env
       required: false
@@ -247,6 +249,17 @@ services:
       bourse_internal:
         ipv4_address: 172.30.55.40
     user: root
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - from bourse.egress.dns_log import dns_health_ok; raise SystemExit(0 if dns_health_ok() is None
+        else 1)
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 5s
   sinkhole:
     image: bourse:local
     build:
@@ -482,6 +495,681 @@ services:
         condition: service_healthy
     tmpfs:
     - /tmp
+  agent-poison-loud:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - poison-loud
+    env_file:
+    - path: data/run/env/agent-poison-loud.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.80
+        aliases:
+        - poison-loud.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55501/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-poison-quiet:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - poison-quiet
+    env_file:
+    - path: data/run/env/agent-poison-quiet.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.81
+        aliases:
+        - poison-quiet.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55502/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-sleeper-loud:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - sleeper-loud
+    env_file:
+    - path: data/run/env/agent-sleeper-loud.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.82
+        aliases:
+        - sleeper-loud.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55503/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-sleeper-quiet:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - sleeper-quiet
+    env_file:
+    - path: data/run/env/agent-sleeper-quiet.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.83
+        aliases:
+        - sleeper-quiet.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55504/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-exfil-http:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - exfil-http
+    env_file:
+    - path: data/run/env/agent-exfil-http.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.84
+        aliases:
+        - exfil-http.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55505/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-exfil-https:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - exfil-https
+    env_file:
+    - path: data/run/env/agent-exfil-https.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.85
+        aliases:
+        - exfil-https.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55506/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-exfil-dns:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - exfil-dns
+    env_file:
+    - path: data/run/env/agent-exfil-dns.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.86
+        aliases:
+        - exfil-dns.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55507/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-smuggler-raw:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - smuggler-raw
+    env_file:
+    - path: data/run/env/agent-smuggler-raw.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.87
+        aliases:
+        - smuggler-raw.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55508/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-smuggler-patient:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - smuggler-patient
+    env_file:
+    - path: data/run/env/agent-smuggler-patient.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.88
+        aliases:
+        - smuggler-patient.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55509/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-token-burner-raw:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - token-burner-raw
+    env_file:
+    - path: data/run/env/agent-token-burner-raw.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.89
+        aliases:
+        - token-burner-raw.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55510/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-token-burner-patient:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - token-burner-patient
+    env_file:
+    - path: data/run/env/agent-token-burner-patient.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.90
+        aliases:
+        - token-burner-patient.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55511/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-slow-loris-raw:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - slow-loris-raw
+    env_file:
+    - path: data/run/env/agent-slow-loris-raw.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.91
+        aliases:
+        - slow-loris-raw.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55512/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-slow-loris-patient:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - slow-loris-patient
+    env_file:
+    - path: data/run/env/agent-slow-loris-patient.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.92
+        aliases:
+        - slow-loris-patient.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55513/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  agent-misreporter:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - misreporter
+    env_file:
+    - path: data/run/env/agent-misreporter.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.93
+        aliases:
+        - misreporter.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55514/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      meter:
+        condition: service_healthy
+      mcp-table:
+        condition: service_healthy
+      mcp-pii:
+        condition: service_healthy
+      mcp-units:
+        condition: service_healthy
+    tmpfs:
+    - /tmp
+  card-attacks:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - adversary
+    - serve
+    - card-attacks
+    env_file:
+    - path: data/run/env/card-attacks.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.94
+        aliases:
+        - card-attacks.vendor-x.local
+        - a1.vendor-x.local
+        - a1b.vendor-x.local
+        - a2.vendor-x.local
+        - a3.vendor-x.local
+        - a9-1.2.0.vendor-x.local
+        - a9-rollback.vendor-x.local
+        - a9-reuse.vendor-x.local
+        - control.vendor-x.local
+    dns:
+    - 172.30.55.40
+    volumes:
+    - ./data/keys/vendor-x.local:/app/data/keys/vendor-x.local:ro
+    profiles:
+    - adversaries
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55520/.well-known/agent-card.json
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
   broker:
     image: bourse:local
     build:
@@ -504,7 +1192,7 @@ services:
     - tools
     depends_on:
       egress-dns:
-        condition: service_started
+        condition: service_healthy
   egress-probe:
     image: bourse:local
     build:
@@ -527,7 +1215,7 @@ services:
     - test
     depends_on:
       egress-dns:
-        condition: service_started
+        condition: service_healthy
 networks:
   bourse_internal:
     internal: true

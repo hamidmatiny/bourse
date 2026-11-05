@@ -98,6 +98,8 @@ class Outcome:
     error_kind: str = "internal"
     detail: str = "scripted failure"
     sleep_s: float = 0.0
+    artifact_text: str = ""
+    artifact_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 Behaviour = Callable[[ParsedRequest], Awaitable[Outcome]]
@@ -156,10 +158,16 @@ class FakeExecutor(SkillExecutor):
         if outcome.kind == "fail":
             await updater.failed(self._status(updater, outcome.error_kind, outcome.detail))
         elif outcome.kind == "input_required":
-            await updater.requires_input(updater.new_agent_message([Part(text="need input")]))
+            await updater.requires_input(updater.new_agent_message([Part(text=outcome.detail)]))
         else:
             output = outcome.output if outcome.kind == "complete" else {"unexpected": True}
-            await updater.add_artifact([new_data_part(output)], name=f"{req.skill.value}.output")
+            parts = [new_data_part(output)]
+            if outcome.artifact_text:
+                parts.append(Part(text=outcome.artifact_text))
+            art_kwargs: dict[str, Any] = {"name": f"{req.skill.value}.output"}
+            if outcome.artifact_metadata:
+                art_kwargs["metadata"] = outcome.artifact_metadata
+            await updater.add_artifact(parts, **art_kwargs)
             await updater.complete()
 
 

@@ -9,9 +9,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from bourse.contracts.exam import ExamReport
 from bourse.contracts.registry import (
     AgentRecord,
     ApiError,
+    AvailabilityRequest,
     CardRevision,
     RegisterRequest,
     RegistrationOutcome,
@@ -22,6 +24,7 @@ from bourse.contracts.registry import (
 )
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import TrustState, Violation, ViolationReport
+from bourse.registry.rate_limit import TokenBucket
 from bourse.registry.repo import VendorExists
 from bourse.registry.service import RegistryService
 from bourse.registry.state import IllegalTransition, UnknownAgent, transition
@@ -35,11 +38,17 @@ def _error(status: int, detail: str) -> JSONResponse:
 
 
 def create_app(
-    service: RegistryService, admin_token: str, exams: "ExamScheduler | None" = None
+    service: RegistryService,
+    admin_token: str,
+    exams: "ExamScheduler | None" = None,
+    rate_per_min: int = 10,
 ) -> FastAPI:
     """`exams`: when set, accepted PENDING registrations start an admission exam (ADR-0037)."""
     app = FastAPI(title="BOURSE registry", version="0.1.0")
     repo = service.repo
+    buckets = TokenBucket(rate_per_min)
+    # Process-local selection gate (ADR-0042 sole-provider). Not TrustState; not persisted.
+    unavailable: set[str] = set()
     if exams is not None:
         service.on_accepted = exams.schedule
 
@@ -68,15 +77,27 @@ def create_app(
         except VendorExists as exc:
             raise HTTPException(409, f"vendor {body.domain} exists") from exc
 
+    def _client_ip(request: Request) -> str:
+        return request.client.host if request.client is not None else "unknown"
+
+    def _rate_ok(ip: str, vendor: str) -> bool:
+        return buckets.allow(f"ip:{ip}") and buckets.allow(f"vendor:{vendor}")
+
     @app.post("/agents/register", response_model=RegistrationOutcome)
-    async def register(body: RegisterRequest) -> JSONResponse:
+    async def register(body: RegisterRequest, request: Request) -> JSONResponse:
+        if not _rate_ok(_client_ip(request), body.vendor_domain):
+            return _error(429, "rate limit exceeded")
         outcome = await service.register(body)
         return JSONResponse(
             outcome.model_dump(mode="json"), status_code=201 if outcome.accepted else 422
         )
 
     @app.post("/agents/{agent_id}/refresh", response_model=RegistrationOutcome)
-    async def refresh(agent_id: str) -> JSONResponse:
+    async def refresh(agent_id: str, request: Request) -> JSONResponse:
+        agent = await repo.get_agent(agent_id)
+        vendor = agent.vendor_domain if agent is not None else agent_id
+        if not _rate_ok(_client_ip(request), vendor):
+            return _error(429, "rate limit exceeded")
         outcome = await service.refresh(agent_id)
         status = 200 if outcome.accepted else 404 if outcome.agent_id is None else 422
         return JSONResponse(outcome.model_dump(mode="json"), status_code=status)
@@ -88,7 +109,11 @@ def create_app(
         q: Annotated[str | None, Query(max_length=200)] = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> list[AgentRecord]:
-        return await repo.search(skill=skill, state=state, q=q, limit=limit)
+        fetch = limit if not unavailable else min(200, limit + len(unavailable))
+        rows = await repo.search(skill=skill, state=state, q=q, limit=fetch)
+        if not unavailable:
+            return rows
+        return [a for a in rows if a.agent_id not in unavailable][:limit]
 
     @app.get("/agents/{agent_id}")
     async def get_agent(agent_id: str) -> AgentRecord:
@@ -96,6 +121,17 @@ def create_app(
         if agent is None:
             raise HTTPException(404, "unknown agent")
         return agent
+
+    @app.post("/agents/{agent_id}/availability", dependencies=admin)
+    async def set_availability(agent_id: str, body: AvailabilityRequest) -> dict[str, bool | str]:
+        """Mark agent unavailable for selection without changing TrustState (ADR-0042)."""
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        if body.available:
+            unavailable.discard(agent_id)
+        else:
+            unavailable.add(agent_id)
+        return {"agent_id": agent_id, "available": body.available}
 
     @app.get("/agents/{agent_id}/revisions")
     async def revisions(agent_id: str) -> list[CardRevision]:
@@ -114,7 +150,7 @@ def create_app(
             evidence=body.evidence,
             at=datetime.now(UTC),
         )
-        await repo.add_violation(violation)
+        await service.engine.ingest(violation, attributed=True)
         return violation
 
     @app.get("/agents/{agent_id}/violations")
@@ -136,6 +172,18 @@ def create_app(
         if await repo.get_agent(agent_id) is None:
             raise HTTPException(404, "unknown agent")
         return {"started": exams.schedule(agent_id)}
+
+    @app.get("/agents/{agent_id}/exam-result")
+    async def exam_result(agent_id: str) -> ExamReport:
+        """Last finished admission exam (per-task outcomes + grader detail)."""
+        if exams is None:
+            raise HTTPException(503, "admission exams not configured")
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        result = exams.results.get(agent_id)
+        if result is None:
+            raise HTTPException(404, "no exam result yet")
+        return result
 
     @app.post("/agents/{agent_id}/state", dependencies=admin)
     async def change_state(agent_id: str, body: StateChangeRequest) -> StateTransition:

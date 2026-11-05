@@ -2,6 +2,7 @@
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -35,6 +36,12 @@ llm_usage = Table(
     Column("status", Integer, nullable=False),
     Column("error_kind", Text),
     Column("at", DateTime(timezone=True), nullable=False),
+    Column("queue_wait_ms", Float, nullable=False, server_default="0"),
+    Column("total_duration_ms", Float, nullable=True),
+    Column("load_duration_ms", Float, nullable=True),
+    Column("prompt_eval_duration_ms", Float, nullable=True),
+    Column("eval_duration_ms", Float, nullable=True),
+    Column("reload", Boolean, nullable=False, server_default="false"),
     CheckConstraint("tokens_in >= 0 AND tokens_out >= 0", name="ck_llm_usage_tokens"),
 )
 

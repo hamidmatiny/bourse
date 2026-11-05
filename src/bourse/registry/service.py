@@ -5,9 +5,10 @@ semver -> version history. Signature comes first so an edited card is always TAM
 later reason.
 
 Attribution: a violation found on a card the registry fetched itself from the vendor's host
-(refresh, or register with card_url) is attributed to the vendor. Only attributed HARD
-violations move an ACTIVE agent to QUARANTINED. Pushed inline cards can be submitted by anyone,
-so their violations are recorded but do not change the agent's state.
+(refresh, or register with card_url) is attributed to the vendor. TrustEngine (ADR-0039)
+quarantines on HARD attributed immediately and on k SOFT attributed strikes in window W.
+Pushed inline cards can be submitted by anyone, so their violations are recorded (then
+aggregated per vendor-hour, ADR-0043) but do not change the agent's state.
 """
 
 import json
@@ -35,11 +36,12 @@ from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import Severity, TrustState, Violation
 from bourse.crypto.card_sign import verify_card
 from bourse.crypto.jcs import CanonicalizationError, card_from_dict, card_to_dict, payload_digest
+from bourse.registry.aggregate import ViolationAggregator
 from bourse.registry.fetch import MAX_CARD_BYTES, CardTooLarge, FetchFailed, fetch_card
 from bourse.registry.lint import LintConfig, host_on_vendor, lint_card
 from bourse.registry.repo import Repository, RevisionExists
 from bourse.registry.semver import SemVer
-from bourse.registry.state import transition
+from bourse.trust.engine import TrustEngine
 
 VERIFY_TO_REJECT: dict[VerifyResult, RejectReason] = {
     VerifyResult.NO_SIGNATURE: RejectReason.UNSIGNED,
@@ -115,6 +117,11 @@ class RegistryService:
         policy: RegistryPolicy | None = None,
         clock: Callable[[], datetime] = _default_clock,
         on_accepted: Callable[[str], object] | None = None,
+        engine: TrustEngine | None = None,
+        aggregator: ViolationAggregator | None = None,
+        strike_k: int = 3,
+        strike_window_s: float = 86400.0,
+        inline_per_hour: int = 20,
     ) -> None:
         self.repo = repo
         # Called with agent_id after an accepted registration that leaves the agent PENDING
@@ -123,6 +130,10 @@ class RegistryService:
         self._client = fetch_client
         self._policy = policy or RegistryPolicy()
         self._clock = clock
+        self.engine = engine or TrustEngine(repo, k=strike_k, window_s=strike_window_s, clock=clock)
+        self.aggregator = aggregator or ViolationAggregator(
+            repo, max_individual=inline_per_hour, clock=clock
+        )
 
     async def add_vendor(self, req: VendorCreate) -> Vendor:
         vendor = Vendor(domain=req.domain, name=req.name, keys=req.keys, created_at=self._clock())
@@ -288,15 +299,17 @@ class RegistryService:
                 attributable,
             )
         for warning in lint.soft:
-            await self.repo.add_violation(
-                Violation(
-                    kind=LINT_WARNING,
-                    severity=Severity.SOFT,
-                    agent_id=agent_id,
-                    evidence=f"{warning.field}: {warning.detail}",
-                    at=now,
-                )
+            warning_v = Violation(
+                kind=LINT_WARNING,
+                severity=Severity.SOFT,
+                agent_id=agent_id,
+                evidence=f"{warning.field}: {warning.detail}",
+                at=now,
             )
+            if attributable:
+                await self.engine.ingest(warning_v, attributed=True)
+            else:
+                await self.aggregator.add(warning_v, vendor.domain)
         if self.on_accepted is not None and record.state is TrustState.PENDING:
             self.on_accepted(agent_id)
         return RegistrationOutcome(
@@ -355,23 +368,16 @@ class RegistryService:
             evidence=f"{evidence}; source={source}",
             at=now,
         )
-        await self.repo.add_violation(violation)
-        state = existing.state if existing else None
-        if (
-            existing is not None
-            and severity is Severity.HARD
-            and attributable
-            and existing.state is TrustState.ACTIVE
-        ):
-            record = await transition(
-                self.repo,
-                agent_id,
-                TrustState.QUARANTINED,
-                actor="registry",
-                reason=f"HARD violation {reason.value}",
-                now=now,
-            )
-            state = record.to_state
+        vendor_domain = (
+            existing.vendor_domain if existing is not None else agent_id.partition("@")[2]
+        )
+        if attributable:
+            state_after = await self.engine.ingest(violation, attributed=True)
+            fallback = existing.state if existing else None
+            state = state_after if state_after is not None else fallback
+        else:
+            await self.aggregator.add(violation, vendor_domain or "unknown")
+            state = existing.state if existing else None
         return RegistrationOutcome(
             accepted=False,
             reason=reason,

@@ -40,6 +40,15 @@ def canary_ok(row: LedgerRow) -> bool:
     return row.state is DelegationState.COMPLETED and row.spot_check_passed is True
 
 
+def canary_grader_fail(row: LedgerRow) -> bool:
+    """Trust strike only when the canary completed, contract-valid, and grader/spot failed.
+
+    Timeouts, card_fetch_failed, 429, cancellations, CONTENTION are reliability/infra — never
+    CANARY_FAIL (ADR-0042 fix round 2).
+    """
+    return row.state is DelegationState.COMPLETED and row.spot_check_passed is False
+
+
 class CanaryRunner:
     def __init__(
         self,
@@ -85,7 +94,9 @@ class CanaryRunner:
             f"{EXAM_NS}canary:{agent.agent_id}:{skill.value}:{secrets.token_hex(8)}", token
         )
         payload = build_input(skill, ds.csv_text, ds.truth)
-        record, output, _detail, spot = await self.delegator.attempt(run_id, sub, agent, 1, payload)
+        record, output, _detail, spot = await self.delegator.attempt(
+            run_id, sub, agent, 1, payload, bourse_kind="canary"
+        )
         graded = output is not None and grade(skill, output, ds.truth).passed
         row = await self.recorder.record(
             record,
@@ -98,13 +109,18 @@ class CanaryRunner:
             for r in await self.ledger.list_rows(skill=skill)
             if r.agent_id == agent.agent_id and r.kind == "canary"
         ]
-        if len(canaries) >= 2 and not canary_ok(canaries[-1]) and not canary_ok(canaries[-2]):
+        if (
+            len(canaries) >= 2
+            and canary_grader_fail(canaries[-1])
+            and canary_grader_fail(canaries[-2])
+        ):
             await self.registry.report_violation(
                 agent.agent_id,
                 ViolationReport(
                     kind=CANARY_FAIL,
                     severity=Severity.SOFT,
-                    evidence=f"2 consecutive canary failures on {skill.value}; last run {run_id}",
+                    evidence=f"2 consecutive grader-failed canaries on {skill.value}; "
+                    f"last run {run_id}",
                 ),
             )
         return row

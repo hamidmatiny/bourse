@@ -23,7 +23,7 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0018](0018-mcp-langchain-adapter.md) | MCP → LangChain adapter with allowlist and tool budgets | 2a |
 | [0019](0019-format-json-correction.md) | Correction: format=json support differs by model; submit-tool for all models | 2b |
 | [0020](0020-sampling-determinism-memory.md) | Sampling set by the proxy; num_ctx and memory headroom | 2b |
-| [0021](0021-agent-packaging.md) | Agent packaging, vendor mapping, frameworks, CrewAI isolation | 2b |
+| [0021](0021-agent-packaging.md) | Agent packaging, vendor mapping, frameworks, CrewAI isolation (models → 0047) | 2b |
 | [0022](0022-a2a-task-contract.md) | A2A request/artifact contract; REJECTED vs FAILED | 2b |
 | [0023](0023-graders.md) | Deterministic graders and pass thresholds | 2b |
 | [0024](0024-planner.md) | Planner: submit-tool over the closed taxonomy, template fallback, no card text in prompts | 3 |
@@ -41,3 +41,11 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0036](0036-card-lint.md) | Card lint | 5a |
 | [0037](0037-admission-exam-canaries.md) | Admission exam, canaries, exam/bench disjointness | 5a |
 | [0038](0038-num-ctx-single-source.md) | num_ctx single source | 5a |
+| [0039](0039-trust-engine-strike-policy.md) | Trust engine and strike policy | 5b |
+| [0040](0040-input-required-policy.md) | INPUT_REQUIRED closed schemas | 5b |
+| [0041](0041-per-task-meter-budgets.md) | Per-task meter budgets and usage misreport | 5b |
+| [0042](0042-adversary-suite.md) | Adversary suite A4-A8, methodology, known gaps | 5b |
+| [0043](0043-registration-rate-limits.md) | Registration rate limits and violation aggregates | 5b |
+| [0044](0044-reload-classification-keep-alive.md) | Reload classification and keep_alive | 5b |
+| [0046](0046-resident-growth-candidates.md) | Measured model-roster options (a–d); candidate d selected | 5b |
+| [0047](0047-single-model-roster.md) | Single-model roster + timeout ordering (supersedes 0021 models) | 5b |

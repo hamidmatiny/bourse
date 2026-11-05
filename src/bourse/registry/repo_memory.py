@@ -1,6 +1,7 @@
 """In-memory Repository for unit tests and `bourse attacks`."""
 
 import re
+from datetime import datetime
 
 from bourse.contracts.registry import AgentRecord, CardRevision, StateTransition, Vendor
 from bourse.contracts.skills import SkillId
@@ -21,6 +22,7 @@ class InMemoryRepository:
         self._revisions: dict[tuple[str, str], CardRevision] = {}
         self._violations: list[Violation] = []
         self._transitions: list[StateTransition] = []
+        self._aggregates: dict[tuple[str, datetime, str], int] = {}
 
     async def add_vendor(self, vendor: Vendor) -> None:
         if vendor.domain in self._vendors:
@@ -46,6 +48,16 @@ class InMemoryRepository:
 
     async def add_violation(self, violation: Violation) -> None:
         self._violations.append(violation)
+
+    async def bump_aggregate(self, vendor_domain: str, hour: datetime, kind: str) -> int:
+        key = (vendor_domain, hour, kind)
+        self._aggregates[key] = self._aggregates.get(key, 0) + 1
+        return self._aggregates[key]
+
+    async def get_aggregate(self, vendor_domain: str, hour: datetime) -> int:
+        return sum(
+            n for (d, h, _k), n in self._aggregates.items() if d == vendor_domain and h == hour
+        )
 
     async def list_violations(self, agent_id: str) -> list[Violation]:
         return [v for v in self._violations if v.agent_id == agent_id]

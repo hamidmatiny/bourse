@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from bourse.adversaries.catalog import ADVERSARY_NAMES
 from bourse.agents.catalog import AGENT_NAMES, specs_from_settings
 from bourse.agents.pii_precise.isolation import CREWAI_ENV
 from bourse.config import Settings
@@ -42,7 +43,7 @@ class Service:
     env: dict[str, str] = field(default_factory=dict)
 
 
-METER_CLIENTS = (*AGENT_NAMES, BROKER_METER_ID)
+METER_CLIENTS = (*AGENT_NAMES, BROKER_METER_ID, *ADVERSARY_NAMES)
 
 
 def load_secrets() -> dict[str, Any]:
@@ -231,9 +232,31 @@ def set_mode(mode: str) -> None:
     MODE_FILE.write_text(mode + "\n")
 
 
+def database_url(settings: Settings) -> str:
+    """Host CLI DB URL: retarget to bourse_compose when stack mode is compose."""
+    from sqlalchemy.engine import make_url
+
+    from bourse.stack.topology import COMPOSE_DB
+
+    url = make_url(settings.bourse_database_url)
+    if current_mode() == "compose" and url.database != COMPOSE_DB:
+        return url.set(database=COMPOSE_DB).render_as_string(hide_password=False)
+    return settings.bourse_database_url
+
+
 def write_compose_env(settings: Settings) -> list[Path]:
     """data/run/env/<service>.env (0600) from data/run/secrets.json; never committed."""
+    from bourse.crypto.keys import DEFAULT_KEY_DIR, generate_vendor_keyset
+    from bourse.llm.latency import load_deadline_by_model
     from bourse.stack.topology import ENV_DIR, env_files
+
+    if not (DEFAULT_KEY_DIR / "vendor-x.local" / "jwks.json").exists():
+        generate_vendor_keyset("vendor-x.local")
+
+    deadlines = dict(settings.exam_deadline_by_model)
+    if not deadlines:
+        deadlines = load_deadline_by_model(base_deadline_s=settings.bourse_exam_deadline_s)
+    deadline_env = ",".join(f"{m}={d:.3f}" for m, d in sorted(deadlines.items()))
 
     out_dir = Path(ENV_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +265,8 @@ def write_compose_env(settings: Settings) -> list[Path]:
         load_secrets(),
         model_large=settings.bourse_model_large,
         model_small=settings.bourse_model_small,
+        ollama_num_parallel=settings.ollama_num_parallel,
+        exam_deadline_by_model=deadline_env,
     )
     for name, content in files.items():
         path = out_dir / f"{name}.env"
@@ -266,3 +291,92 @@ def compose_ps() -> list[dict[str, Any]]:
         parsed = json.loads(line)
         rows.extend(parsed if isinstance(parsed, list) else [parsed])
     return rows
+
+
+def compose_profiles() -> tuple[str, ...]:
+    """Every profile named in docker-compose.yml (from topology), sorted."""
+    from bourse.stack.topology import compose_document
+
+    found: set[str] = set()
+    for svc in compose_document()["services"].values():
+        for p in svc.get("profiles") or []:
+            found.add(str(p))
+    return tuple(sorted(found))
+
+
+def compose_profile_args() -> list[str]:
+    """`--profile X` for every profile in the compose file (not hard-coded)."""
+    out: list[str] = []
+    for p in compose_profiles():
+        out.extend(["--profile", p])
+    return out
+
+
+def compose_project_name() -> str:
+    return os.environ.get("COMPOSE_PROJECT_NAME") or Path.cwd().name
+
+
+def _docker(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["docker", *args], check=False, text=True, capture_output=True)
+
+
+def leftover_bourse_containers() -> list[str]:
+    project = compose_project_name()
+    result = _docker(
+        "ps",
+        "-a",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--format",
+        "{{.Names}}",
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def leftover_bourse_networks() -> list[str]:
+    project = compose_project_name()
+    result = _docker("network", "ls", "--format", "{{.Name}}")
+    prefix = f"{project}_"
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip().startswith(prefix) or line.strip() == project
+    ]
+
+
+def remove_compose_oneoffs() -> list[str]:
+    """Remove `docker compose run` one-off containers for this project."""
+    project = compose_project_name()
+    result = _docker(
+        "ps",
+        "-aq",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--filter",
+        "label=com.docker.compose.oneoff=True",
+    )
+    ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if ids:
+        _docker("rm", "-f", *ids)
+    return ids
+
+
+def verify_bourse_gone() -> tuple[list[str], list[str]]:
+    """Return (containers, networks) that should be empty after a full down."""
+    return leftover_bourse_containers(), leftover_bourse_networks()
+
+
+def stack_compose_down() -> subprocess.CompletedProcess[str]:
+    """Down every profile + volumes + orphans, then strip one-offs."""
+    args = [*compose_profile_args(), "down", "-v", "--remove-orphans"]
+    result = compose(*args, check=False)
+    remove_compose_oneoffs()
+    # Second pass: anything still labeled for this project (stuck created/exited).
+    left = leftover_bourse_containers()
+    if left:
+        _docker("rm", "-f", *left)
+        remove_compose_oneoffs()
+    nets = leftover_bourse_networks()
+    if nets:
+        _docker("network", "rm", *nets)
+    return result

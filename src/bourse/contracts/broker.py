@@ -58,6 +58,9 @@ class DelegationState(StrEnum):
     TIMEOUT = "TIMEOUT"  # per-delegation wall-clock deadline
     INTERRUPTED = "INTERRUPTED"  # INPUT_REQUIRED / AUTH_REQUIRED (policy in Phase 5)
     CARD_DRIFT = "CARD_DRIFT"  # live card digest != registry digest; no message sent
+    CANCELED_QUARANTINE = "CANCELED_QUARANTINE"  # agent left ACTIVE before or during the call
+    SESSION_POLICY = "SESSION_POLICY"  # INPUT_REQUIRED rejected (ADR-0040)
+    CONTENTION = "CONTENTION"  # meter queue_wait_ms > 50% of deadline; no strike / no f
     ERROR = "ERROR"  # card fetch or transport failure
 
 
@@ -115,6 +118,8 @@ class RunRecord(BaseModel):
     started_at: datetime
     ended_at: datetime | None = None
     wall_ms: float | None = None
+    # Set when status=ABORTED: RESIDENT_LIMIT / BREAKER / WATCHDOG / WALL_BUDGET + detail.
+    abort_reason: str | None = None
 
 
 class IntakeReport(BaseModel):

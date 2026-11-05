@@ -10,7 +10,12 @@ class RunRepository(Protocol):
     async def create_run(self, run: RunRecord) -> None: ...
 
     async def finish_run(
-        self, run_id: str, status: RunStatus, ended_at: datetime, wall_ms: float
+        self,
+        run_id: str,
+        status: RunStatus,
+        ended_at: datetime,
+        wall_ms: float,
+        abort_reason: str | None = None,
     ) -> None: ...
 
     async def get_run(self, run_id: str) -> RunRecord | None: ...
@@ -33,12 +38,22 @@ class InMemoryRunRepository:
         self._runs[run.run_id] = run
 
     async def finish_run(
-        self, run_id: str, status: RunStatus, ended_at: datetime, wall_ms: float
+        self,
+        run_id: str,
+        status: RunStatus,
+        ended_at: datetime,
+        wall_ms: float,
+        abort_reason: str | None = None,
     ) -> None:
         run = self._runs[run_id]
-        self._runs[run_id] = run.model_copy(
-            update={"status": status, "ended_at": ended_at, "wall_ms": wall_ms}
-        )
+        update: dict[str, object] = {
+            "status": status,
+            "ended_at": ended_at,
+            "wall_ms": wall_ms,
+        }
+        if abort_reason is not None:
+            update["abort_reason"] = abort_reason
+        self._runs[run_id] = run.model_copy(update=update)
 
     async def get_run(self, run_id: str) -> RunRecord | None:
         return self._runs.get(run_id)

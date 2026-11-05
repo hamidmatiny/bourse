@@ -17,8 +17,8 @@ import httpx
 from bourse.config import get_settings
 from bourse.contracts.probe import ProbeReport
 from bourse.runtime.deadline import DeadlineExceeded, deadline
+from bourse.runtime.resident import RESIDENT_LIMIT_BYTES, warn_unexpected_loaded_models
 
-RESIDENT_LIMIT_BYTES = 26 * 10**9
 MAX_RESIDENT_MODELS = 2
 
 _PROBE_TOOL: dict[str, Any] = {
@@ -68,6 +68,7 @@ async def run_probe(
     tags_resp.raise_for_status()
     models = tuple(str(m.get("name", "")) for m in tags_resp.json().get("models") or [])
 
+    keep_alive = get_settings().bourse_meter_keep_alive
     format_status: int | None
     try:
         async with deadline(deadline_s):
@@ -79,6 +80,7 @@ async def run_probe(
                     "format": "json",
                     "stream": False,
                     "think": False,
+                    "keep_alive": keep_alive,
                     "options": {"num_predict": 16, "num_ctx": num_ctx},
                 },
             )
@@ -109,6 +111,7 @@ async def run_probe(
                     "tools": [_PROBE_TOOL],
                     "stream": False,
                     "think": False,
+                    "keep_alive": keep_alive,
                     "options": {
                         "num_predict": 128,
                         "temperature": 0,
@@ -132,7 +135,12 @@ async def run_probe(
     loaded = ps_resp.json().get("models") or []
     resident_bytes = sum(int(m.get("size") or 0) for m in loaded)
     resident_ok = resident_bytes < RESIDENT_LIMIT_BYTES and len(loaded) <= MAX_RESIDENT_MODELS
+    settings = get_settings()
+    warn_unexpected_loaded_models(loaded, settings.roster_models)
     server_settings = dict.fromkeys(HOST_SETTINGS, UNVERIFIED)
+    # Ollama HTTP API does not expose these; record the BOURSE/config value used by the meter gate.
+    server_settings["OLLAMA_NUM_PARALLEL"] = f"config:{settings.ollama_num_parallel}"
+    server_settings["OLLAMA_MAX_LOADED_MODELS"] = f"config:{MAX_RESIDENT_MODELS}"
     for m in loaded:
         if m.get("context_length") is not None:
             server_settings[f"context_length:{m.get('name', '')}"] = str(m["context_length"])

@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -44,6 +44,23 @@ class CallResult:
     error: str
     wall_s: float
     error_kind: str = ""
+    a2a_task_id: str = ""
+    data_parts: list[dict[str, Any]] = field(default_factory=list)
+    text_parts: list[str] = field(default_factory=list)
+    extra_parts: int = 0
+    artifact_metadata: dict[str, Any] = field(default_factory=dict)
+    untrusted_text: str = ""
+
+
+def _part_texts(parts: Any) -> tuple[list[str], int]:
+    texts: list[str] = []
+    extra = 0
+    for part in parts:
+        if getattr(part, "text", ""):
+            texts.append(part.text)
+        elif not (hasattr(part, "data") and part.data):
+            extra += 1
+    return texts, extra
 
 
 async def send_task(
@@ -53,6 +70,9 @@ async def send_task(
     task_id: str,
     deadline_s: float = CALL_DEADLINE_S,
     http_client: httpx.AsyncClient | None = None,
+    on_task: Callable[[str], None] | None = None,
+    *,
+    bourse_kind: str = "task",
 ) -> CallResult:
     started = time.monotonic()
     owns = http_client is None
@@ -67,25 +87,54 @@ async def send_task(
             parts=[new_data_part(payload_json)],
         )
         message.metadata.update(
-            {"skill_id": skill_id, "task_id": task_id, "deadline_s": deadline_s}
+            {
+                "skill_id": skill_id,
+                "task_id": task_id,
+                "deadline_s": deadline_s,
+                "bourse_kind": bourse_kind,
+            }
         )
         state = "TASK_STATE_UNSPECIFIED"
         output: dict[str, Any] | None = None
         error = ""
         error_kind = ""
+        a2a_task_id = ""
+        data_parts: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+        extra_parts = 0
+        artifact_metadata: dict[str, Any] = {}
+        untrusted: list[str] = []
         async for event in client.send_message(SendMessageRequest(message=message)):
             if event.HasField("status_update"):
                 status = event.status_update.status
                 state = TaskState.Name(status.state)
                 if status.HasField("message"):
-                    error = " ".join(p.text for p in status.message.parts if p.text)
+                    texts, extra = _part_texts(status.message.parts)
+                    text_parts = texts
+                    extra_parts = extra
+                    data_parts = [
+                        p for p in get_data_parts(list(status.message.parts)) if isinstance(p, dict)
+                    ]
+                    error = " ".join(texts)
                     kind = MessageToDict(status.message.metadata).get("error_kind")
                     error_kind = kind if isinstance(kind, str) else ""
+                    untrusted.extend(texts)
+                    untrusted.extend(json.dumps(p) for p in data_parts)
             elif event.HasField("artifact_update"):
-                data = get_data_parts(list(event.artifact_update.artifact.parts))
+                art = event.artifact_update.artifact
+                data = get_data_parts(list(art.parts))
                 if data and isinstance(data[0], dict):
                     output = data[0]
+                    untrusted.append(json.dumps(data[0]))
+                texts, _extra = _part_texts(art.parts)
+                untrusted.extend(texts)
+                if art.HasField("metadata"):
+                    artifact_metadata = MessageToDict(art.metadata)
+                    untrusted.append(json.dumps(artifact_metadata))
             elif event.HasField("task"):
+                a2a_task_id = event.task.id
+                if on_task is not None and a2a_task_id:
+                    on_task(a2a_task_id)
                 state = TaskState.Name(event.task.status.state)
     finally:
         if owns:
@@ -96,6 +145,12 @@ async def send_task(
         error=error,
         wall_s=time.monotonic() - started,
         error_kind=error_kind,
+        a2a_task_id=a2a_task_id,
+        data_parts=data_parts,
+        text_parts=text_parts,
+        extra_parts=extra_parts,
+        artifact_metadata=artifact_metadata,
+        untrusted_text=" ".join(untrusted),
     )
 
 

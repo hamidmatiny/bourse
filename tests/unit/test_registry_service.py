@@ -196,7 +196,7 @@ async def test_refresh_rollback_quarantines_active_agent() -> None:
     audit = await service.repo.list_transitions(PROFILER_ID)
     assert [(t.from_state, t.to_state, t.actor) for t in audit] == [
         (TrustState.PENDING, TrustState.ACTIVE, "t"),
-        (TrustState.ACTIVE, TrustState.QUARANTINED, "registry"),
+        (TrustState.ACTIVE, TrustState.QUARANTINED, "trust"),
     ]
     approved = ApprovalDecision(
         approved=True, by="operator", at=audit[-1].at, reason="vendor fixed card"

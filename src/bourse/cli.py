@@ -12,6 +12,7 @@ import typer
 
 from bourse import __version__
 from bourse.config import get_settings
+from bourse.stack.launcher import database_url as resolve_db_url
 from bourse.llm.ollama import DEFAULT_HTTP_TIMEOUT
 from bourse.llm.probe import run_probe
 from bourse.registry.attacks import DEFAULT_FIXTURES, format_table, run_phase1
@@ -26,6 +27,7 @@ keys_app = typer.Typer(no_args_is_help=True, help="Vendor signing keys.")
 card_app = typer.Typer(no_args_is_help=True, help="Sign and verify Agent Cards.")
 registry_app = typer.Typer(no_args_is_help=True, help="Agent registry service.")
 attacks_app = typer.Typer(no_args_is_help=True, help="Deterministic attack suites.")
+adversary_app = typer.Typer(no_args_is_help=True, help="Benchmark-only adversary agents.")
 mcp_app = typer.Typer(no_args_is_help=True, help="Pure MCP tool servers.")
 meter_app = typer.Typer(no_args_is_help=True, help="Metering LLM proxy.")
 agent_app = typer.Typer(no_args_is_help=True, help="A2A agents.")
@@ -42,6 +44,7 @@ app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
 app.add_typer(attacks_app, name="attacks")
+app.add_typer(adversary_app, name="adversary")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(meter_app, name="meter")
 app.add_typer(agent_app, name="agent")
@@ -97,12 +100,75 @@ async def _probe(base_url: str, model: str, out_dir: Path) -> int:
 def probe(
     model: Annotated[str | None, typer.Option(help="Model to probe (default: small)")] = None,
     out_dir: Annotated[str, typer.Option(help="Directory for probe JSON")] = "data/probe",
+    latency: Annotated[
+        int | None,
+        typer.Option(
+            "--latency",
+            help="N isolated /api/chat samples per model; print p50/p95 and write latency-latest.json",
+        ),
+    ] = None,
+    memory: Annotated[
+        bool,
+        typer.Option(
+            "--memory",
+            help="Measure resident bytes for candidate pairs + throwaway gemma4:e4b exams; write ADR-0045",
+        ),
+    ] = False,
 ) -> None:
-    """Probe the local Ollama server and write data/probe/probe-<utc>.json."""
+    """Probe the local Ollama server and write data/probe/probe-<utc>.json.
+
+    With `--latency N`, also measure isolated latency for large+small models (ADR-0044).
+    With `--memory`, measure pair resident bytes and throwaway e4b exams (ADR-0045).
+    """
     settings = get_settings()
+    if memory:
+        from bourse.llm.memory_probe import run_memory_probe
+
+        path = asyncio.run(run_memory_probe(settings))
+        typer.echo(f"wrote {path}")
+        raise typer.Exit(0)
     chosen = model or settings.bourse_model_small
+    if latency is not None:
+        if latency < 1:
+            raise typer.BadParameter("--latency N must be >= 1")
+        code = asyncio.run(_probe_latency(settings, latency, Path(out_dir)))
+        raise typer.Exit(code)
     code = asyncio.run(_probe(settings.ollama_base_url, chosen, Path(out_dir)))
     raise typer.Exit(code)
+
+
+async def _probe_latency(settings: Any, n: int, out_dir: Path) -> int:
+    from bourse.llm.latency import measure_latency, write_latency_report
+
+    models = list(
+        dict.fromkeys([settings.bourse_model_small, settings.bourse_model_large])
+    )
+    typer.echo(
+        f"latency N={n} models={models} "
+        f"OLLAMA_NUM_PARALLEL(config)={settings.ollama_num_parallel} "
+        f"(host OLLAMA_NUM_PARALLEL is not exposed by the Ollama HTTP API)"
+    )
+    async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
+        summaries = await measure_latency(client, settings.ollama_base_url, models, n=n)
+    path = write_latency_report(
+        summaries,
+        base_url=settings.ollama_base_url,
+        base_deadline_s=settings.bourse_exam_deadline_s,
+        out_dir=out_dir,
+    )
+    for model, s in summaries.items():
+        deadline = s.exam_deadline_s(settings.bourse_exam_deadline_s)
+        typer.echo(
+            f"{model}: n={s.n} "
+            f"total_s p50={s.p50_total_s:.2f} p95={s.p95_total_s:.2f} "
+            f"load_s p50={s.p50_load_s:.2f} p95={s.p95_load_s:.2f} "
+            f"eval_s p50={s.p50_eval_s:.2f} p95={s.p95_eval_s:.2f} "
+            f"exam_deadline_s=max(base={settings.bourse_exam_deadline_s:.0f}, "
+            f"3*p95)={deadline:.1f}"
+        )
+    typer.echo(f"written: {path}")
+    typer.echo(f"latest: {out_dir / 'latency-latest.json'}")
+    return 0
 
 
 @keys_app.command("gen")
@@ -186,22 +252,61 @@ def registry_serve(
     from bourse.registry.service import RegistryPolicy, RegistryService
 
     settings = get_settings()
-    engine = create_async_engine(settings.bourse_database_url)
+    engine = create_async_engine(resolve_db_url(settings))
     client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0))
     service = RegistryService(
-        SqlRepository(engine), client, RegistryPolicy(dev_hosts=settings.dev_hosts)
+        SqlRepository(engine),
+        client,
+        RegistryPolicy(dev_hosts=settings.dev_hosts),
+        strike_k=settings.bourse_trust_strikes,
+        strike_window_s=settings.bourse_trust_window_s,
+        inline_per_hour=settings.bourse_inline_violations_per_hour,
     )
     exams = None
     secret = settings.bourse_honeytoken_secret.get_secret_value().encode()
     if secret:
+        from bourse.broker.delegate import MeterBudgetClient
+        from bourse.stack.launcher import BROKER_METER_ID, meter_key
         from bourse.telemetry import setup_tracing, traced_async_client
         from bourse.trust.exam import ExamConfig, ExamRunner, ExamScheduler
         from bourse.trust.repo import SqlHoneytokenRepository
 
+        from bourse.agents.catalog import specs_from_settings
+        from bourse.llm.latency import load_deadline_by_model
+        from bourse.registry.service import make_agent_id
+
+        # Prefer env (compose embeds probe results); fall back to latency-latest.json (host).
+        deadline_by_model = dict(settings.exam_deadline_by_model)
+        if not deadline_by_model:
+            deadline_by_model = load_deadline_by_model(
+                base_deadline_s=settings.bourse_exam_deadline_s
+            )
+        max_task_deadline = max(
+            [settings.bourse_exam_deadline_s, *deadline_by_model.values()],
+            default=settings.bourse_exam_deadline_s,
+        )
+        if deadline_by_model:
+            typer.echo(
+                "exam deadlines (max(base, 3*p95)): "
+                + ", ".join(f"{m}={d:.1f}s" for m, d in sorted(deadline_by_model.items()))
+            )
+        else:
+            typer.echo(
+                "exam deadlines: base only "
+                f"({settings.bourse_exam_deadline_s:.0f}s); "
+                "run `bourse probe --latency 5` for per-model 3*p95"
+            )
+        id_to_model = {
+            make_agent_id(spec.display_name, spec.vendor_domain): spec.model
+            for spec in specs_from_settings(settings).values()
+        }
         setup_tracing("bourse-registry", settings.otel_exporter_otlp_endpoint)
+        exam_http = traced_async_client(timeout=httpx.Timeout(max_task_deadline + 30))
+        # Exam delegations need the same per-task meter budgets as the broker (ADR-0041).
+        broker_meter = settings.bourse_agent_key.get_secret_value() or meter_key(BROKER_METER_ID)
         runner = ExamRunner(
             service.repo,
-            traced_async_client(timeout=httpx.Timeout(settings.bourse_exam_deadline_s + 30)),
+            exam_http,
             SqlHoneytokenRepository(engine),
             secret,
             ExamConfig(
@@ -209,10 +314,21 @@ def registry_serve(
                 pass_n=settings.bourse_exam_pass,
                 cooldown_s=settings.bourse_exam_cooldown_s,
                 deadline_s=settings.bourse_exam_deadline_s,
+                exam_timeout_s=settings.bourse_exam_timeout_s,
+                deadline_by_model=deadline_by_model,
             ),
+            budgets=MeterBudgetClient(exam_http, settings.bourse_meter_url, broker_meter),
+            task_max_tokens=settings.bourse_task_max_tokens,
+            task_max_calls=settings.bourse_task_max_calls,
+            model_for_agent=lambda aid: id_to_model.get(aid, settings.bourse_model_small),
         )
         exams = ExamScheduler(runner)
-    app_ = create_app(service, settings.bourse_admin_token.get_secret_value(), exams)
+    app_ = create_app(
+        service,
+        settings.bourse_admin_token.get_secret_value(),
+        exams,
+        rate_per_min=settings.bourse_register_rate_per_min,
+    )
     uvicorn.run(app_, host=host or settings.bourse_bind_host, port=port)
 
 
@@ -224,6 +340,78 @@ def attacks_phase1(
     results = asyncio.run(run_phase1(Path(fixtures)))
     typer.echo(format_table(results))
     raise typer.Exit(0 if all(r.caught for r in results) else 1)
+
+
+@attacks_app.command("phase5")
+def attacks_phase5(
+    runs: Annotated[int, typer.Option(help="e2e runs per ACTIVE adversary")] = 6,
+    only: Annotated[str, typer.Option(help="Comma-separated scenario ids")] = "",
+    reset_honest: Annotated[
+        bool,
+        typer.Option(
+            "--reset-honest",
+            help="Reinstates quarantined honest agents to ACTIVE before this invocation only",
+        ),
+    ] = False,
+) -> None:
+    """Adversary suite A4-A8 plus A1-A3,A9 over compose card_url (ADR-0042)."""
+    from bourse.adversaries.runner import (
+        InfraNotReady,
+        InvariantViolation,
+        format_phase5,
+        red,
+        run_phase5,
+        write_report,
+    )
+
+    settings = get_settings()
+    ids = [p.strip() for p in only.split(",") if p.strip()] or None
+
+    def _infra_message(exc: BaseException) -> str | None:
+        if isinstance(exc, InfraNotReady):
+            return exc.check
+        if isinstance(exc, BaseExceptionGroup):
+            for sub in exc.exceptions:
+                msg = _infra_message(sub)
+                if msg is not None:
+                    return msg
+        return None
+
+    async def go() -> int:
+        try:
+            report = await run_phase5(
+                settings, runs=runs, only=ids, echo=typer.echo, reset_honest=reset_honest
+            )
+        except InvariantViolation as exc:
+            typer.echo(f"INVARIANT FAIL: {exc}", err=True)
+            return 1
+        except BaseException as exc:
+            msg = _infra_message(exc)
+            if msg is None:
+                raise
+            typer.echo(f"INFRA NOT READY: {msg}", err=True)
+            return 1
+        path = await write_report(report)
+        typer.echo(format_phase5(report))
+        typer.echo(f"written {path}")
+        return 1 if red(report) else 0
+
+    raise typer.Exit(asyncio.run(go()))
+
+
+@adversary_app.command("serve")
+def adversary_serve(
+    name: Annotated[str, typer.Argument(help="Adversary name or card-attacks")],
+) -> None:
+    """Serve one benchmark-only adversary (compose profile adversaries)."""
+    from bourse.adversaries.agent import serve_adversary
+    from bourse.adversaries.catalog import ADVERSARY_NAMES, CARD_ATTACKS_NAME
+
+    if name not in (*ADVERSARY_NAMES, CARD_ATTACKS_NAME):
+        raise typer.BadParameter(f"unknown adversary {name}")
+    settings = get_settings()
+    key = settings.bourse_agent_key.get_secret_value()
+    serve_adversary(name, settings, settings.bourse_meter_url, key)
 
 
 @mcp_app.command("serve")
@@ -280,7 +468,7 @@ def meter_serve(
     app_ = create_meter_app(
         providers=providers,
         keys=keys,
-        repo=SqlMeterRepository(create_async_engine(settings.bourse_database_url)),
+        repo=SqlMeterRepository(create_async_engine(resolve_db_url(settings))),
         config=MeterConfig(
             max_tokens_per_call=settings.bourse_meter_max_tokens_per_call,
             deadline_s=settings.bourse_meter_deadline_s,
@@ -290,6 +478,12 @@ def meter_serve(
                 keep_alive=settings.bourse_meter_keep_alive,
             ),
             ollama_base_url=settings.ollama_base_url,
+            require_task_budget=True,
+            max_in_flight=settings.bourse_meter_max_in_flight,
+            tokens_per_min=settings.bourse_meter_tokens_per_min,
+            max_prompt_tokens=settings.bourse_meter_max_prompt_tokens,
+            queue_timeout_s=settings.bourse_meter_queue_timeout_s,
+            global_parallel=settings.ollama_num_parallel,
         ),
         upstream_client=client,
     )
@@ -313,8 +507,19 @@ def agent_serve(name: Annotated[str, typer.Argument(help="Agent name")]) -> None
 @stack_app.command("up")
 def stack_up(
     mode: Annotated[str, typer.Option(help="compose (default) or host")] = "compose",
+    with_adversaries: Annotated[
+        bool,
+        typer.Option(
+            "--with-adversaries",
+            help="After honest agents are registered and ACTIVE, start the adversaries profile",
+        ),
+    ] = False,
 ) -> None:
-    """compose: isolated containers with egress control (ADR-0034); host: local processes."""
+    """compose: isolated containers with egress control (ADR-0034); host: local processes.
+
+    `--with-adversaries` registers honest agents, waits until 5/5 ACTIVE, then starts the
+    adversaries profile. Do not use raw `docker compose --profile adversaries up`.
+    """
     from bourse.stack.launcher import (
         HOST_MODE_WARNING,
         compose,
@@ -329,14 +534,52 @@ def stack_up(
     settings = get_settings()
     if mode not in ("compose", "host"):
         raise typer.BadParameter("mode must be compose or host")
+    if with_adversaries and mode != "compose":
+        raise typer.BadParameter("--with-adversaries requires --mode compose")
     set_mode(mode)
     if mode == "compose":
+        from bourse.stack.activation import dump_activation_diagnostics, wait_agents_active
+        from bourse.stack.launcher import verify_bourse_gone
+        from bourse.stack.register import register_all
+
+        left_c, left_n = verify_bourse_gone()
+        if left_c or left_n:
+            typer.echo(
+                "leftover bourse state; run `uv run bourse stack down` first:\n"
+                + "\n".join([*(f"  container {c}" for c in left_c), *(f"  network {n}" for n in left_n)]),
+                err=True,
+            )
+            raise typer.Exit(1)
         written = write_compose_env(settings)
         typer.echo(f"env files {len(written)} (data/run/env/)")
-        result = compose("up", "-d", check=False)
+        # Honest stack only; adversaries start after ACTIVE when --with-adversaries.
+        result = compose("up", "-d", "--remove-orphans", check=False)
         typer.echo((result.stdout + result.stderr).strip())
         if result.returncode != 0:
             raise typer.Exit(result.returncode)
+        code = _wait_compose_healthy(timeout_s=300.0)
+        if code != 0:
+            raise typer.Exit(code)
+        from bourse.stack.activation import _sample_ollama_resident
+
+        _sample_ollama_resident(settings, echo=typer.echo, warn_roster=True)
+        if not with_adversaries:
+            raise typer.Exit(0)
+        rows, accepted, total = register_all(settings, "compose")
+        typer.echo(table(rows))
+        typer.echo(f"registered {accepted}/{total} ACCEPTED")
+        if accepted != total:
+            dump_activation_diagnostics(typer.echo)
+            raise typer.Exit(1)
+        if wait_agents_active(settings, echo=typer.echo) != 0:
+            dump_activation_diagnostics(typer.echo)
+            raise typer.Exit(1)
+        adv = compose(
+            "--profile", "adversaries", "up", "-d", "--remove-orphans", check=False
+        )
+        typer.echo((adv.stdout + adv.stderr).strip())
+        if adv.returncode != 0:
+            raise typer.Exit(adv.returncode)
         raise typer.Exit(_wait_compose_healthy(timeout_s=300.0))
     typer.echo(HOST_MODE_WARNING)
     svcs = services(settings)
@@ -353,33 +596,45 @@ def stack_up(
 
 @stack_app.command("down")
 def stack_down() -> None:
-    """Stop the stack (compose: containers removed, volumes kept)."""
-    from bourse.stack.launcher import compose, current_mode, services, stop
+    """Stop the stack: every compose profile, volumes, orphans, and one-off runs."""
+    from bourse.stack.launcher import (
+        compose_profiles,
+        current_mode,
+        services,
+        stack_compose_down,
+        stop,
+        verify_bourse_gone,
+    )
 
     if current_mode() == "compose":
-        result = compose("down", check=False)
+        profiles = compose_profiles()
+        typer.echo("profiles " + (" ".join(profiles) if profiles else "(none)"))
+        result = stack_compose_down()
         typer.echo((result.stdout + result.stderr).strip())
-        typer.echo("compose down" + (" ok" if result.returncode == 0 else " FAILED"))
-        raise typer.Exit(result.returncode)
+        left_c, left_n = verify_bourse_gone()
+        if left_c or left_n:
+            for c in left_c:
+                typer.echo(f"leftover container {c}", err=True)
+            for n in left_n:
+                typer.echo(f"leftover network {n}", err=True)
+            typer.echo("compose down FAILED: leftover bourse state", err=True)
+            raise typer.Exit(1)
+        typer.echo("compose down ok (no bourse containers/networks)")
+        raise typer.Exit(0 if result.returncode == 0 else result.returncode)
     svcs = services(get_settings())
     stopped = sum(stop(s.name) for s in svcs)
     typer.echo(f"stopped {stopped}/{len(svcs)}")
 
 
 def _registry_states() -> list[list[str]]:
-    from bourse.contracts.registry import AgentRecord, StateTransition
+    from bourse.stack.activation import registry_agent_rows
 
     settings = get_settings()
     base = settings.bourse_registry_url.rstrip("/")
     rows = [["agent", "state", "last transition"]]
     try:
         with httpx.Client(timeout=10.0) as client:
-            agents = [AgentRecord.model_validate(a) for a in client.get(f"{base}/agents").json()]
-            for a in sorted(agents, key=lambda x: x.agent_id):
-                raw = client.get(f"{base}/agents/{a.agent_id}/transitions").json()
-                ts = [StateTransition.model_validate(t) for t in raw]
-                last = f"{ts[-1].actor}: {ts[-1].reason}" if ts else "-"
-                rows.append([a.agent_id, a.state.value, last])
+            rows.extend([list(r) for r in registry_agent_rows(client, base)])
     except httpx.HTTPError as exc:
         rows.append(["registry unreachable", type(exc).__name__, "-"])
     return rows
@@ -409,21 +664,68 @@ def _compose_status() -> int:
     return 0 if ps and ok == len(ps) else 1
 
 
+def _unexpected_exit(c: dict[str, Any]) -> bool:
+    """True when a service has exited or is unhealthy (not migrate with code 0)."""
+    if c.get("Service") == "migrate":
+        return False
+    state = str(c.get("State") or "")
+    health = str(c.get("Health") or "-")
+    return state == "exited" or health == "unhealthy"
+
+
+CREATED_TERMINAL_S = 20.0
+
+
 def _wait_compose_healthy(timeout_s: float) -> int:
-    """Poll `docker compose ps` until every service is running+healthy (migrate: exited 0)."""
+    """Poll `docker compose ps` until every service is running+healthy (migrate: exited 0).
+
+    State `created` for > CREATED_TERMINAL_S is terminal (usually static-IP / orphan conflict).
+    """
     import time
 
+    from bourse.stack.launcher import compose, compose_ps
+
     started = time.monotonic()
+    created_since: dict[str, float] = {}
     while True:
         elapsed = time.monotonic() - started
-        if elapsed >= timeout_s:
-            return _compose_status()
-        from bourse.stack.launcher import compose_ps
-
         ps = compose_ps()
+        dead = [c for c in ps if _unexpected_exit(c)]
+        if dead:
+            c = dead[0]
+            name = str(c.get("Service"))
+            typer.echo(f"service {name} failed: {c.get('Status')}", err=True)
+            logs = compose("logs", "--tail", "30", name, check=False)
+            typer.echo((logs.stdout + logs.stderr).rstrip())
+            return 1
+        now = time.monotonic()
+        still_created: list[str] = []
+        for c in ps:
+            name = str(c.get("Service"))
+            state = str(c.get("State") or "").lower()
+            if state == "created":
+                created_since.setdefault(name, now)
+                if now - created_since[name] > CREATED_TERMINAL_S:
+                    still_created.append(name)
+            else:
+                created_since.pop(name, None)
+        if still_created:
+            name = still_created[0]
+            typer.echo(
+                f"service {name} stuck in created >{CREATED_TERMINAL_S:.0f}s "
+                "(static IP conflict / orphan?). Use: docker compose down -v --remove-orphans",
+                err=True,
+            )
+            logs = compose("logs", "--tail", "30", name, check=False)
+            typer.echo((logs.stdout + logs.stderr).rstrip() or "(no logs; container never started)")
+            detail = compose("ps", "-a", name, check=False)
+            typer.echo((detail.stdout or detail.stderr or "").strip()[:500])
+            return 1
         pending = [str(c.get("Service")) for c in ps if not _service_ok(c)]
         typer.echo(f"[{elapsed:4.0f}s] services ok {len(ps) - len(pending)}/{len(ps)}")
         if ps and not pending:
+            return _compose_status()
+        if elapsed >= timeout_s:
             return _compose_status()
         time.sleep(5)
 
@@ -478,29 +780,22 @@ def stack_register() -> None:
 
 @stack_app.command("wait-active")
 def stack_wait_active(
-    timeout: Annotated[float, typer.Option(help="Seconds (max 600)")] = 600.0,
+    timeout: Annotated[
+        float | None,
+        typer.Option(
+            help="Seconds (default: exam_timeout_s + 120). EXAM_FAILED fails immediately."
+        ),
+    ] = None,
 ) -> None:
-    """Poll the registry until every registered agent is ACTIVE (exams finish) or timeout."""
-    import time
+    """Poll until every registered agent is ACTIVE; dump diagnostics on failure."""
+    from bourse.stack.activation import dump_activation_diagnostics, exam_wait_s, wait_agents_active
 
-    from bourse.stack.launcher import table
-
-    timeout = min(timeout, 600.0)
-    started = time.monotonic()
-    while True:
-        states = _registry_states()
-        agents = states[1:]
-        active = sum(r[1] == "ACTIVE" for r in agents)
-        elapsed = time.monotonic() - started
-        eta = elapsed / active * (len(agents) - active) if active else float("nan")
-        typer.echo(f"[{elapsed:5.0f}s] ACTIVE {active}/{len(agents)} eta={eta:.0f}s")
-        if agents and active == len(agents):
-            typer.echo(table(states))
-            raise typer.Exit(0)
-        if elapsed >= timeout:
-            typer.echo(table(states))
-            raise typer.Exit(1)
-        time.sleep(10)
+    settings = get_settings()
+    limit = exam_wait_s(settings) if timeout is None else float(timeout)
+    code = wait_agents_active(settings, timeout_s=limit, echo=typer.echo)
+    if code != 0:
+        dump_activation_diagnostics(typer.echo)
+    raise typer.Exit(code)
 
 
 @stack_app.command("compose-file")
@@ -564,6 +859,58 @@ def egress_dnsmasq_config() -> None:
     typer.echo(dnsmasq_conf(), nl=False)
 
 
+@egress_app.command("dns-health")
+def egress_dns_health() -> None:
+    """Query 127.0.0.1:53: allowlisted name resolves, attacker.example is sinkholed."""
+    from bourse.egress.dns_log import dns_health_ok
+
+    problem = dns_health_ok()
+    if problem:
+        typer.echo(problem, err=True)
+        raise typer.Exit(1)
+    typer.echo("dns-health ok")
+
+
+@egress_app.command("dns-watch")
+def egress_dns_watch(
+    log_path: Annotated[str, typer.Argument(help="dnsmasq --log-facility file")],
+) -> None:
+    """Tail dnsmasq query log; HARD DNS_EGRESS for agent lookups off the allowlist."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.broker.delegate import RegistryClient
+    from bourse.contracts.trust import ViolationReport
+    from bourse.egress.dns_log import DnsLogWatcher
+    from bourse.stack.launcher import admin_token
+    from bourse.stack.topology import agent_ids_by_ip, allowlisted_names, ip_identities
+    from bourse.trust.repo import SqlEgressRepository
+
+    settings = get_settings()
+
+    async def serve() -> None:
+        engine = create_async_engine(resolve_db_url(settings))
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            registry = RegistryClient(http, settings.bourse_registry_url, admin_token(settings))
+
+            async def report(agent_id: str, v: ViolationReport) -> None:
+                try:
+                    await registry.report_violation(agent_id, v)
+                except httpx.HTTPError as exc:
+                    typer.echo(f"DNS_EGRESS not recorded for {agent_id}: {exc!r}", err=True)
+
+            watcher = DnsLogWatcher(
+                identities=ip_identities(),
+                agent_ips=agent_ids_by_ip(),
+                allow=frozenset(allowlisted_names()),
+                repo=SqlEgressRepository(engine),
+                report=report,
+            )
+            typer.echo(f"dns-watch {log_path}")
+            await watcher.follow(Path(log_path))
+
+    asyncio.run(serve())
+
+
 @egress_app.command("sinkhole")
 def egress_sinkhole() -> None:
     """Serve the sinkhole on BOURSE_SINKHOLE_PORTS; write egress_events; report violations."""
@@ -580,7 +927,7 @@ def egress_sinkhole() -> None:
     ports = [int(p) for p in settings.bourse_sinkhole_ports.split(",") if p.strip()]
 
     async def serve() -> None:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         async with httpx.AsyncClient(timeout=10.0) as http:
             registry = RegistryClient(http, settings.bourse_registry_url, admin_token(settings))
 
@@ -609,7 +956,9 @@ def db_ensure() -> None:
     import psycopg
     from sqlalchemy.engine import make_url
 
-    url = make_url(get_settings().bourse_database_url)
+    from bourse.stack.topology import COMPOSE_DB
+
+    url = make_url(resolve_db_url(get_settings()))
     name = url.database or "bourse"
     admin = url.set(drivername="postgresql", database="postgres").render_as_string(
         hide_password=False
@@ -619,6 +968,10 @@ def db_ensure() -> None:
         if exists is None:
             conn.execute(f'CREATE DATABASE "{name}"')
     typer.echo(f"database {name} " + ("exists" if exists else "created"))
+    typer.echo(
+        f"llm_usage lives in database={name} (compose migrate uses {COMPOSE_DB}; "
+        f"POSTGRES_DB=bourse is empty unless you migrate host mode)"
+    )
 
 
 @exam_app.command("run")
@@ -653,7 +1006,7 @@ def smoke_all_cmd(
     settings = get_settings()
 
     async def run() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             rows, out = await smoke_all(
                 settings,
@@ -722,7 +1075,7 @@ def runs_show(run_id: Annotated[str, typer.Argument(help="Run id")]) -> None:
     settings = get_settings()
 
     async def show() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             repo = SqlRunRepository(engine)
             run = await repo.get_run(run_id)
@@ -826,7 +1179,7 @@ def usage_maxcall() -> None:
     settings = get_settings()
 
     async def show() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             usage = await SqlMeterRepository(engine).list_usage()
         finally:
@@ -870,7 +1223,7 @@ def scores_cmd() -> None:
     settings = get_settings()
 
     async def show() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             rows = await SqlLedgerRepository(engine).list_rows()
         finally:
@@ -907,7 +1260,7 @@ def ledger_show(run: Annotated[str, typer.Option("--run", help="Run id")]) -> No
     settings = get_settings()
 
     async def show() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             rows = await SqlLedgerRepository(engine).list_rows(run_id=run)
         finally:
@@ -965,7 +1318,7 @@ def ledger_export(
     target = out or Path("data/exports") / f"ledger-{stamp}.parquet"
 
     async def export() -> int:
-        engine = create_async_engine(settings.bourse_database_url)
+        engine = create_async_engine(resolve_db_url(settings))
         try:
             rows = await SqlLedgerRepository(engine).list_rows()
         finally:

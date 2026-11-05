@@ -144,3 +144,32 @@ async def test_unknown_agent_404(client: httpx.AsyncClient) -> None:
     resp = await client.post("/agents/nope/refresh")
     assert resp.status_code == 404
     assert RegistrationOutcome.model_validate(resp.json()).reason is RejectReason.UNKNOWN_AGENT
+
+
+async def test_availability_gate_hides_from_search_not_get(
+    client: httpx.AsyncClient, vendor_a: Party
+) -> None:
+    await _onboard(client, vendor_a)
+    body = {"vendor_domain": "vendor-a.local", "card": vendor_a.sign(load_card("honest-a-profiler.json"))}
+    resp = await client.post("/agents/register", json=body)
+    assert resp.status_code == 201, resp.text
+    await client.post(
+        f"/agents/{PROFILER_ID}/state", json={"to_state": "ACTIVE", "reason": "exam"}, headers=ADMIN
+    )
+    listed = await client.get("/agents", params={"state": "ACTIVE"})
+    assert any(a["agent_id"] == PROFILER_ID for a in listed.json())
+    gate = await client.post(
+        f"/agents/{PROFILER_ID}/availability", json={"available": False}, headers=ADMIN
+    )
+    assert gate.status_code == 200
+    assert gate.json() == {"agent_id": PROFILER_ID, "available": False}
+    # TrustState unchanged; get still works; search hides the agent.
+    got = await client.get(f"/agents/{PROFILER_ID}")
+    assert got.json()["state"] == "ACTIVE"
+    listed2 = await client.get("/agents", params={"state": "ACTIVE"})
+    assert not any(a["agent_id"] == PROFILER_ID for a in listed2.json())
+    await client.post(
+        f"/agents/{PROFILER_ID}/availability", json={"available": True}, headers=ADMIN
+    )
+    listed3 = await client.get("/agents", params={"state": "ACTIVE"})
+    assert any(a["agent_id"] == PROFILER_ID for a in listed3.json())

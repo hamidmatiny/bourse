@@ -49,5 +49,24 @@ fixes below (smoke-20261030T154654Z): calls completed 18/18, graded passed 18/18
 | pii_precise, 3 datasets | FAILED 3/3 (`internal: ValueError`) | crewai 1.6.1 adds a `security_context` argument before validating tool input against `args_schema`; the strict NameColumns schema (extra=forbid) rejected every `submit`. qwen then returned a 1-token empty reply and crewai raised ValueError. | The CrewAI tool uses a permissive args schema and drops `security_context`; the captured arguments are validated against the strict NameColumns model afterwards. A ValueError raised after a valid submit keeps that submit; without one the kickoff counts as one of MAX_KICKOFFS=2 attempts. | COMPLETED 3/3, graded passed 3/3 |
 | normalizer, orders | FAILED (`invalid_llm_output: SubmitFailed`) | gemma4:12b on Ollama 0.40.6 opens a thinking channel despite `think: false` when a column is ambiguous (`amount`); Ollama strips it, leaving empty content and no tool call (replay: 6/6 empty; removing `amount` alone fixed it). | Normalizer prompt adds "If you are not sure, use null." Replay: tool call 6/6 (3 datasets x 2 seeds), measurements units unchanged. | COMPLETED, graded passed 1/1 |
 
+## Amendment (Phase 5b, 2026-11-03) — roster models restored
+
+Commit `89f6b03` (Phase 5a, 2026-11-01) changed `BOURSE_MODEL_SMALL` / defaults in
+`.env.example`, `src/bourse/config.py`, and README from `gemma4:12b` → `qwen3.5:4b`
+without a dedicated ADR approval for the roster change. Stated reason in that commit /
+README: gemma4:12b on Ollama's MLX runner grew (~16.7 GB) and with qwen3.5:27b (~15.5 GB)
+exceeded the 26 GB resident limit (ADR-0038 open issue measured ~30.4 GB). The **23.8 GB**
+peak printed in that same commit's acceptance block was measured **after** the swap
+(qwen3.5:4b + qwen3.5:27b with q8_0), not as proof that gemma was under budget. Phase 5b
+exams on qwen3.5:4b for normalizer/pii-fast scored below the gemma 5a baseline
+(normalizer 3/5 vs 5/5; pii-fast 4/5 vs 5/5).
+
+**Decision:** restore the table above (`gemma4:12b` small / `qwen3.5:27b-q4_K_M` large).
+Code source of truth: `bourse.agents.catalog.ROSTER_MODELS`. A unit test fails if
+settings or broker agent→model maps drift. Any future model change needs an ADR with
+measured resident memory + exam n/N and explicit operator approval.
+
 ## Status
-Accepted (Phase 2b).
+Accepted (Phase 2b; roster amendment Phase 5b). **Model column superseded by
+[ADR-0047](0047-single-model-roster.md)** (all five agents on `qwen3.5:27b-q4_K_M`).
+Vendors, frameworks, ports, and CrewAI isolation in this ADR remain in force.

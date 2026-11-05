@@ -165,14 +165,116 @@ async def test_canaries_count_in_reliability(beds: list[BrokerBed]) -> None:
 
 
 async def test_two_consecutive_canary_failures_record_violation(beds: list[BrokerBed]) -> None:
-    # `complete` returns the people fixture's answers for any input: right on real tasks,
-    # wrong on canary datasets.
+    """CANARY_FAIL requires COMPLETED + grader-fail (not TIMEOUT/spot-fail).
+
+    Drop PERSON_NAME only: spot check (EMAIL/CARD/SIN) still passes; grade F1 fails.
+    """
+    from tests.broker_harness import honest
+
+    async def grade_fail_spot_ok(req: ParsedRequest) -> Outcome:
+        out = await honest(req)
+        if req.skill is SkillId.PII_DETECT and out.output is not None:
+            findings = [f for f in out.output["findings"] if f["kind"] != "PERSON_NAME"]
+            return Outcome(output={"findings": findings})
+        # Non-PII: honest on real tasks; on canaries honest() uses the delegated csv so
+        # both spot and grade pass — only the PII agent is expected to strike.
+        return out
+
+    bed = await canary_bed(beds, grade_fail_spot_ok, runs=4)
+    repo = bed.registry_service.repo
+    pii = next(a for a in bed.agents if a.name == "a-pii")
+    kinds = [v.kind for v in await repo.list_violations(pii.agent_id)]
+    assert kinds.count(CANARY_FAIL) == 1, (pii.agent_id, kinds)
+    pii_canaries = [
+        r
+        for r in bed.ledger.rows
+        if r.kind == "canary" and r.agent_id == pii.agent_id
+    ]
+    assert len(pii_canaries) >= 2
+    assert all(r.state.value == "COMPLETED" for r in pii_canaries)
+    assert all(r.spot_check_passed is False for r in pii_canaries)
+
+
+async def test_infra_canary_errors_do_not_emit_canary_fail(beds: list[BrokerBed]) -> None:
+    """Spot-check failures on canaries are SPOTCHECK_FAIL / reliability f, never CANARY_FAIL."""
     from tests.broker_harness import complete
 
     bed = await canary_bed(beds, complete, runs=4)
     repo = bed.registry_service.repo
     for agent in bed.agents:
         kinds = [v.kind for v in await repo.list_violations(agent.agent_id)]
-        assert kinds.count(CANARY_FAIL) == 1, agent.agent_id
+        assert CANARY_FAIL not in kinds, (agent.agent_id, kinds)
     canaries = [r for r in bed.ledger.rows if r.kind == "canary"]
-    assert len(canaries) == 10 and not any(r.spot_check_passed for r in canaries)
+    assert len(canaries) == 10
+    assert not any(r.state.value == "COMPLETED" and r.spot_check_passed is False for r in canaries)
+
+
+async def test_canary_counter_persistent_across_runs_m10() -> None:
+    """25 task delegations over 5 runs, M=10 -> exactly 2 canaries (ledger-wide)."""
+    from datetime import UTC, datetime
+
+    from bourse.broker.canary import CanaryRunner
+    from bourse.contracts.broker import DelegationState, LedgerRow
+    from bourse.ledger.repo import InMemoryLedgerRepository
+
+    ledger = InMemoryLedgerRepository()
+    canary = CanaryRunner(
+        ledger=ledger,
+        recorder=None,  # type: ignore[arg-type]
+        delegator=None,  # type: ignore[arg-type]
+        registry=None,  # type: ignore[arg-type]
+        tokens=None,  # type: ignore[arg-type]
+        secret=b"x",
+        every=10,
+    )
+    agent_id = "a@vendor-a.local"
+    skill = SkillId.PII_DETECT
+    now = datetime(2026, 11, 1, tzinfo=UTC)
+    n_canaries = 0
+    for i in range(25):
+        run_id = f"run-{i // 5}"
+        await ledger.add_row(
+            LedgerRow(
+                run_id=run_id,
+                subtask_id="pii",
+                attempt=1,
+                agent_id=agent_id,
+                skill=skill,
+                revision_digest="0" * 64,
+                agent_major=1,
+                state=DelegationState.COMPLETED,
+                tokens_in=0,
+                tokens_out=0,
+                tool_calls=0,
+                shadow_usd=0.0,
+                price_table_version="t",
+                wall_ms=1.0,
+                spot_check_passed=True,
+                at=now,
+                kind="task",
+            )
+        )
+        if await canary.due(agent_id, skill):
+            n_canaries += 1
+            await ledger.add_row(
+                LedgerRow(
+                    run_id=f"canary-{n_canaries}",
+                    subtask_id="pii",
+                    attempt=1,
+                    agent_id=agent_id,
+                    skill=skill,
+                    revision_digest="0" * 64,
+                    agent_major=1,
+                    state=DelegationState.COMPLETED,
+                    tokens_in=0,
+                    tokens_out=0,
+                    tool_calls=0,
+                    shadow_usd=0.0,
+                    price_table_version="t",
+                    wall_ms=1.0,
+                    spot_check_passed=True,
+                    at=now,
+                    kind="canary",
+                )
+            )
+    assert n_canaries == 2

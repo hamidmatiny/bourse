@@ -36,6 +36,38 @@ def test_agents_internal_only_no_ports_own_key_only() -> None:
     assert networks[topology.INTERNAL]["internal"] is True
 
 
+def test_unexpected_exit_is_terminal_except_migrate() -> None:
+    from bourse.cli import _unexpected_exit
+
+    assert _unexpected_exit({"Service": "egress-dns", "State": "exited"})
+    assert _unexpected_exit({"Service": "egress-dns", "State": "running", "Health": "unhealthy"})
+    assert not _unexpected_exit({"Service": "migrate", "State": "exited"})
+    assert not _unexpected_exit({"Service": "registry", "State": "running"})
+    assert not _unexpected_exit({"Service": "registry", "State": "running", "Health": "starting"})
+
+
+def test_postgres_publishes_only_on_localhost() -> None:
+    svc = compose()["services"]["postgres"]
+    assert svc["ports"] == ["127.0.0.1:55432:5432"]
+    assert topology.HOST_NET in svc["networks"]
+    assert topology.INTERNAL in svc["networks"]
+
+
+def test_egress_dns_command_is_valid_shell() -> None:
+    cmd = compose()["services"]["egress-dns"]["command"]
+    script = cmd[-1] if isinstance(cmd, list) else cmd
+    assert "& &&" not in script
+    assert "log-queries" in script
+    assert "dns-watch" in script
+    # dns-watch must be backgrounded only AFTER conf is written (brace group).
+    assert "{ bourse egress dns-watch" in script
+    assert script.strip().endswith("; }")
+    assert "--conf-file=/tmp/dnsmasq.conf" in script
+    health = compose()["services"]["egress-dns"]["healthcheck"]["test"]
+    assert health[:3] == ["CMD", "python", "-c"]
+    assert "dns_health_ok" in health[3]
+
+
 def test_only_meter_registry_and_tools_reach_the_host_network() -> None:
     services = compose()["services"]
     on_host = sorted(n for n, s in services.items() if topology.HOST_NET in s.get("networks", {}))
@@ -61,8 +93,13 @@ def test_ip_identity_map_matches_catalog_agent_ids() -> None:
     expected = {
         make_agent_id(s.display_name, s.vendor_domain) for s in agent_specs("l", "s").values()
     }
-    assert set(topology.agent_ids_by_ip().values()) == expected
+    identities = set(topology.agent_ids_by_ip().values())
+    assert expected <= identities
     assert topology.ip_identities()[topology.PREFIX + "70"] == "egress-probe"
+    from bourse.adversaries.catalog import VENDOR, adversary_specs
+
+    adv = {make_agent_id(s.display_name, VENDOR) for s in adversary_specs("s").values()}
+    assert adv <= identities
 
 
 def test_dnsmasq_config_from_the_same_list() -> None:
@@ -70,13 +107,32 @@ def test_dnsmasq_config_from_the_same_list() -> None:
     for name in topology.allowlisted_names():
         assert f"server=/{name}/127.0.0.11" in conf
     assert f"address=/#/{topology.SINKHOLE_IP}" in conf
+    assert f"listen-address={topology.EGRESS_DNS_IP}" in conf
+    assert "listen-address=127.0.0.1" in conf
     assert "attacker.example" not in conf
     names = set(topology.allowlisted_names())
     assert {"meter", "registry", "postgres", "profiler.vendor-a.local"} <= names
 
 
+def test_compose_down_includes_every_profile_from_file() -> None:
+    """stack down must pass --profile for every profile declared in compose (not hard-coded)."""
+    from bourse.stack.launcher import compose_profile_args, compose_profiles
+
+    declared: set[str] = set()
+    for svc in topology.compose_document()["services"].values():
+        declared.update(svc.get("profiles") or [])
+    assert declared and set(compose_profiles()) == declared
+    args = compose_profile_args() + ["down", "-v", "--remove-orphans"]
+    assert args[-3:] == ["down", "-v", "--remove-orphans"]
+    flagged = {args[i + 1] for i, a in enumerate(args[:-3]) if a == "--profile"}
+    assert flagged == declared
+
+
 def test_env_files_give_each_agent_only_its_key() -> None:
-    keys = {name: f"key-{name}-0123456789abcdef" for name in [*agent_specs("l", "s"), "broker"]}
+    from bourse.adversaries.catalog import ADVERSARY_NAMES
+
+    names = [*agent_specs("l", "s"), "broker", *ADVERSARY_NAMES]
+    keys = {name: f"key-{name}-0123456789abcdef" for name in names}
     files = topology.env_files(
         {"meter_keys": keys, "admin_token": "admin-0123456789", "honeytoken_secret": "h" * 32},
         model_large="L",

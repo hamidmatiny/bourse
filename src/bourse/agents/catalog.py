@@ -1,4 +1,11 @@
-"""The five honest agents (ADR-0021): vendor, framework, skills, model, MCP allowlist, port."""
+"""The five honest agents (ADR-0021 packaging; ADR-0047 single-model roster).
+
+Roster models below are the single source of truth (`ROSTER_MODELS`). Packaging
+(vendors, frameworks, ports) remains ADR-0021; models are ADR-0047
+(all `qwen3.5:27b-q4_K_M`). `BOURSE_MODEL_SMALL` / `BOURSE_MODEL_LARGE` and broker
+agent→model maps must match; a unit test fails on drift. Any future model change
+needs an ADR with measured memory + exam numbers and operator approval.
+"""
 
 import httpx
 import uvicorn
@@ -19,6 +26,18 @@ from bourse.mcp_servers.common import SERVER_PORTS
 from bourse.telemetry import setup_tracing, traced_async_client
 
 AGENT_NAMES = ("profiler", "pii_precise", "pii_fast", "normalizer", "reporter")
+
+# ADR-0047 single-model roster (supersedes ADR-0021 model column).
+ROSTER_MODEL = "qwen3.5:27b-q4_K_M"
+ROSTER_SMALL_MODEL = ROSTER_MODEL  # env knob alias; equal to large under ADR-0047
+ROSTER_LARGE_MODEL = ROSTER_MODEL
+ROSTER_MODELS: dict[str, str] = {
+    "profiler": ROSTER_MODEL,
+    "pii_precise": ROSTER_MODEL,
+    "pii_fast": ROSTER_MODEL,
+    "normalizer": ROSTER_MODEL,
+    "reporter": ROSTER_MODEL,
+}
 TABLE_TOOLS = frozenset({"profile_columns", "column_stats", "sample_rows"})
 PII_TOOLS = frozenset({"regex_scan", "luhn_check", "sin_check"})
 UNITS_TOOLS = frozenset({"parse_header_unit", "convert"})
@@ -118,13 +137,22 @@ def build_app(spec: AgentSpec, runtime: AgentRuntime, base_url: str) -> FastAPI:
 
 
 def serve_agent(name: str, settings: Settings, meter_url: str, meter_key: str) -> None:
+    import os
+    from dataclasses import replace
+
     spec = specs_from_settings(settings)[name]
+    # Throwaway probes may bump the card version without changing the committed roster.
+    card_version = os.environ.get("BOURSE_CARD_VERSION", "").strip()
+    if card_version:
+        spec = replace(spec, version=card_version)
     if name == "pii_precise":
         from bourse.agents.pii_precise import isolation
 
         isolation.apply()
     setup_tracing(f"bourse-agent-{name}", settings.otel_exporter_otlp_endpoint)
-    client = traced_async_client(timeout=httpx.Timeout(None, connect=5.0))
+    client = traced_async_client(
+        timeout=httpx.Timeout(settings.bourse_agent_llm_timeout_s, connect=5.0)
+    )
     runtime = AgentRuntime(
         meter_url=meter_url,
         meter_key=meter_key,

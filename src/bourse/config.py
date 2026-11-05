@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", frozen=True)
 
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_num_parallel: int = 1
+    # Must match host OLLAMA_NUM_PARALLEL; meter global gate size (ADR-0044).
+    ollama_num_parallel: int = 2
     omniroute_base_url: str = "http://127.0.0.1:20128"
     omniroute_api_key: SecretStr = SecretStr("")
     omniroute_model: str = ""
@@ -20,8 +21,9 @@ class Settings(BaseSettings):
     slack_bot_token: SecretStr = SecretStr("")
     slack_app_token: SecretStr = SecretStr("")
     slack_channel_id: str = ""
+    # ADR-0047: both knobs equal the single roster model (aliases for compose/env).
     bourse_model_large: str = "qwen3.5:27b-q4_K_M"
-    bourse_model_small: str = "qwen3.5:4b"
+    bourse_model_small: str = "qwen3.5:27b-q4_K_M"
     bourse_admin_token: SecretStr = SecretStr("")
     # Comma-separated hosts accepted for any vendor's card URLs (dev only, e.g. localhost).
     bourse_dev_hosts: str = ""
@@ -29,14 +31,34 @@ class Settings(BaseSettings):
     bourse_meter_keys: SecretStr = SecretStr("")
     bourse_meter_max_tokens_per_call: int = 2048
     bourse_meter_deadline_s: float = 120.0
+    # Agent→meter HTTP timeout per LLM call (ADR-0047). Must be >= meter_deadline_s.
+    bourse_agent_llm_timeout_s: float = 180.0
     bourse_meter_temperature: float = 0.0
     bourse_meter_seed: int = 1234
     # Single source for options.num_ctx on every Ollama request (ADR-0038): "model=n,...";
     # "*" is used for models not listed. Rule: smallest of 4096/6144/8192 >= 2 x observed max.
-    bourse_num_ctx_by_model: str = (
-        "qwen3.5:4b=4096,gemma4:e4b=4096,gemma4:12b=4096,qwen3.5:27b-q4_K_M=4096,*=4096"
-    )
+    bourse_num_ctx_by_model: str = "qwen3.5:27b-q4_K_M=4096,*=4096"
+    # Single keep_alive for meter and probe Ollama calls (ADR-0044). Default 30m.
     bourse_meter_keep_alive: str = "30m"
+    # Trust engine (ADR-0039).
+    bourse_trust_strikes: int = 3
+    bourse_trust_window_s: float = 86400.0
+    # Per-task meter budgets (ADR-0041).
+    bourse_task_max_tokens: int = 8192
+    bourse_task_max_calls: int = 20
+    # Meter fair share (ADR-0042 r2): max concurrent upstream calls and token pace per agent.
+    bourse_meter_max_in_flight: int = 1
+    bourse_meter_tokens_per_min: float = 60_000.0
+    # Worst-case prompt tokens for bucket-capacity check (must fit in tokens_per_min).
+    bourse_meter_max_prompt_tokens: int = 4096
+    # Gate queue wait hard cap; must be < bourse_meter_deadline_s (CONTENTION on timeout).
+    bourse_meter_queue_timeout_s: float = 60.0
+    # CONTENTION when queue_wait_ms > this fraction of the delegation deadline.
+    bourse_contention_queue_fraction: float = 0.5
+    # Registration rate limits (ADR-0043): token bucket per IP and per vendor.
+    bourse_register_rate_per_min: int = 10
+    # Unauthenticated inline-card violations stored individually before aggregation.
+    bourse_inline_violations_per_hour: int = 20
     # Local stack wiring (bourse stack up sets these for its subprocesses).
     bourse_meter_url: str = "http://127.0.0.1:55200"
     bourse_registry_url: str = "http://127.0.0.1:55300"
@@ -55,6 +77,11 @@ class Settings(BaseSettings):
     bourse_exam_pass: int = 4
     bourse_exam_cooldown_s: float = 600.0
     bourse_exam_deadline_s: float = 300.0
+    # Per-model exam task deadlines from probe --latency: "model=seconds,..." =
+    # max(base, 3*p95_total_s). Empty -> base only (ADR-0044).
+    bourse_exam_deadline_by_model: str = ""
+    # Whole-exam wall clock; timed-out tasks count as EXAM_TIMEOUT failures.
+    bourse_exam_timeout_s: float = 900.0
     bourse_canary_every: int = 10
     bourse_honeytoken_secret: SecretStr = SecretStr("")
     # Egress sinkhole (ADR-0035).
@@ -75,11 +102,12 @@ class Settings(BaseSettings):
         "gemma4:12b": 5.0,
         "qwen3.5:27b-q4_K_M": 60.0,
     }
+    # ADR-0047: all honest agents on the single roster model.
     bourse_broker_agent_models: dict[str, str] = {
-        "vendor-a-profiler@vendor-a.local": "qwen3.5:4b",
+        "vendor-a-profiler@vendor-a.local": "qwen3.5:27b-q4_K_M",
         "vendor-b-pii-precise@vendor-b.local": "qwen3.5:27b-q4_K_M",
-        "vendor-c-pii-fast@vendor-c.local": "qwen3.5:4b",
-        "vendor-b-normalizer@vendor-b.local": "qwen3.5:4b",
+        "vendor-c-pii-fast@vendor-c.local": "qwen3.5:27b-q4_K_M",
+        "vendor-b-normalizer@vendor-b.local": "qwen3.5:27b-q4_K_M",
         "vendor-a-reporter@vendor-a.local": "qwen3.5:27b-q4_K_M",
     }
     bourse_broker_delegation_deadline_s: float = 300.0
@@ -98,6 +126,22 @@ class Settings(BaseSettings):
     bourse_resident_sustain_s: float = 30.0
     bourse_resident_interval_s: float = 5.0
 
+    @model_validator(mode="after")
+    def _timeout_ordering(self) -> "Settings":
+        """ADR-0047: agent LLM timeout >= meter deadline < exam task deadline <= exam_timeout_s."""
+        agent = float(self.bourse_agent_llm_timeout_s)
+        meter = float(self.bourse_meter_deadline_s)
+        exam_task = float(self.bourse_exam_deadline_s)
+        exam_wall = float(self.bourse_exam_timeout_s)
+        if not (agent >= meter < exam_task <= exam_wall):
+            raise ValueError(
+                "timeout ordering violated (ADR-0047): require "
+                "bourse_agent_llm_timeout_s >= bourse_meter_deadline_s "
+                "< bourse_exam_deadline_s <= bourse_exam_timeout_s; "
+                f"got agent={agent} meter={meter} exam_task={exam_task} exam_wall={exam_wall}"
+            )
+        return self
+
     @property
     def num_ctx_by_model(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -114,6 +158,23 @@ class Settings(BaseSettings):
         if "*" in table:
             return table["*"]
         raise KeyError(f"no num_ctx for model {model!r} in BOURSE_NUM_CTX_BY_MODEL")
+
+    @property
+    def exam_deadline_by_model(self) -> dict[str, float]:
+        """model -> task deadline seconds (from BOURSE_EXAM_DEADLINE_BY_MODEL or empty)."""
+        out: dict[str, float] = {}
+        for entry in (e.strip() for e in self.bourse_exam_deadline_by_model.split(",")):
+            if not entry:
+                continue
+            model, _, value = entry.rpartition("=")
+            if model and value:
+                out[model.strip()] = float(value)
+        return out
+
+    @property
+    def roster_models(self) -> frozenset[str]:
+        """Distinct model tags the honest roster may load (ADR-0047)."""
+        return frozenset({self.bourse_model_small, self.bourse_model_large})
 
     @property
     def dev_hosts(self) -> frozenset[str]:

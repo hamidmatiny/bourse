@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from bourse.agents.common.spec import METER_TASK_HEADER
 from bourse.broker.canary import CanaryRunner
-from bourse.broker.delegate import DEADLINE_GRACE_S, Delegator, RegistryClient
+from bourse.broker.delegate import DEADLINE_GRACE_S, Delegator, MeterBudgetClient, RegistryClient
 from bourse.broker.graph import HEARTBEAT_SLACK_S, Broker
+from bourse.broker.inflight import InFlight
 from bourse.broker.repo_sql import SqlRunRepository
 from bourse.broker.select import (
     EXPLORATION,
@@ -28,7 +29,7 @@ from bourse.broker.select import (
     SelectionPolicy,
 )
 from bourse.config import Settings
-from bourse.contracts.broker import DelegationState, IntakeReport
+from bourse.contracts.broker import DelegationState, IntakeReport, RunStatus
 from bourse.contracts.metering import BudgetSpec
 from bourse.contracts.skills_io import DatasetRef
 from bourse.contracts.tasks import IntakeRequest
@@ -116,11 +117,16 @@ def measured_config(settings: Settings) -> MeasuredConfig:
 
 @asynccontextmanager
 async def broker_from_settings(
-    settings: Settings, echo: Callable[[str], None] = print, policy: str = "measured"
+    settings: Settings,
+    echo: Callable[[str], None] = print,
+    policy: str = "measured",
+    *,
+    canary_every: int | None = None,
 ) -> AsyncIterator[Session]:
     """Broker wired to the local stack, with ledger, MeasuredPolicy (or PriorPolicy for
     baselines), OTel export and the resident memory guard running in the background."""
-    provider = setup_tracing("bourse-broker", settings.otel_exporter_otlp_endpoint)
+    setup_tracing("bourse-broker", settings.otel_exporter_otlp_endpoint)
+    every = settings.bourse_canary_every if canary_every is None else canary_every
     engine = create_async_engine(settings.bourse_database_url)
     deadline_s = settings.bourse_broker_delegation_deadline_s
     timeout = httpx.Timeout(deadline_s + DEADLINE_GRACE_S + 30)
@@ -129,6 +135,14 @@ async def broker_from_settings(
             traced_async_client(timeout=timeout) as http,
             AsyncPostgresSaver.from_conn_string(conninfo(settings.bourse_database_url)) as saver,
         ):
+            # GLOBAL_BREAKER is process-wide and sticky. Reset at session start so a prior
+            # RESIDENT_LIMIT/BREAKER abort is not silently inherited; print the old reason.
+            if GLOBAL_BREAKER.tripped:
+                from bourse.broker.abort import normalize_abort_reason
+
+                was = normalize_abort_reason(GLOBAL_BREAKER.reason) or GLOBAL_BREAKER.reason
+                GLOBAL_BREAKER.reset()
+                echo(f"breaker reset for new session (was: {was})")
             monitor = ResidentMonitor(
                 ollama_sampler(
                     http,
@@ -152,8 +166,22 @@ async def broker_from_settings(
                 load_prices(Path(settings.bourse_prices_file)),
             )
             registry = RegistryClient(http, settings.bourse_registry_url, admin_token(settings))
+            inflight = InFlight()
             delegator = Delegator(
-                registry, http, runs, GLOBAL_BREAKER, deadline_s=deadline_s, ledger=recorder
+                registry,
+                http,
+                runs,
+                GLOBAL_BREAKER,
+                deadline_s=deadline_s,
+                ledger=recorder,
+                inflight=inflight,
+                budgets=MeterBudgetClient(
+                    http, settings.bourse_meter_url, meter_key(BROKER_METER_ID)
+                ),
+                task_max_tokens=settings.bourse_task_max_tokens,
+                task_max_calls=settings.bourse_task_max_calls,
+                usage_lookup=lambda task_id: usage.list_usage(task_id=task_id),
+                contention_queue_fraction=settings.bourse_contention_queue_fraction,
             )
             priors = prior_config(settings)
             chosen_policy: SelectionPolicy = (
@@ -189,14 +217,12 @@ async def broker_from_settings(
                 registry=registry,
                 tokens=SqlHoneytokenRepository(engine),
                 secret=secret.encode(),
-                every=settings.bourse_canary_every,
+                every=every,
             )
             async with monitoring(monitor):
                 yield Session(broker, ledger, monitor)
     finally:
         await engine.dispose()
-        if provider is not None:
-            provider.shutdown()
 
 
 def load_fixture(name: str, dataset_dir: Path = DEFAULT_DATASET_DIR) -> tuple[str, dict[str, Any]]:
@@ -351,27 +377,38 @@ async def e2e_all(
             rows.append(row)
             elapsed = time.monotonic() - started
             eta = elapsed / i * (len(plan) - i)
+            abort = ""
+            if report.abort_reason:
+                abort = f" abort_reason={report.abort_reason}"
             echo(
                 f"[{i}/{len(plan)}] {ds} {row.status} planner={row.planner_used} "
                 f"graded {row.subtasks_passed}/{row.subtasks_total} fallbacks={row.fallbacks} "
                 f"explore={row.exploration_picks} spotcheck_failed={row.spotcheck_failed}/"
                 f"{row.spotcheck_total} tokens={row.tokens_in}/{row.tokens_out} "
                 f"shadow_usd={row.shadow_usd:.6f} wall={row.wall_s}s trace={row.trace_id} "
-                f"eta={eta:.0f}s"
+                f"eta={eta:.0f}s{abort}"
             )
+            if report.status is RunStatus.ABORTED:
+                from bourse.broker.abort import normalize_abort_reason
+
+                reason = normalize_abort_reason(report.abort_reason) or report.abort_reason or "-"
+                echo(f"stopping remaining e2e runs after abort ({reason})")
+                break
         peak = session.monitor.peak
         reloads = session.monitor.reloads
+        reload_counts = session.monitor.counts_by_kind()
         canary_rows = [r for r in await session.ledger.list_rows() if r.kind == "canary"]
     out = E2E_DIR / f"e2e-{stamp}.json"
     await anyio.Path(E2E_DIR).mkdir(parents=True, exist_ok=True)
     payload = {
         "resident_peak_bytes": peak,
         "model_reloads": reloads,
+        "reload_counts": reload_counts,
         "canaries_total": len(canary_rows),
         "runs": [asdict(r) for r in rows],
     }
     await anyio.Path(out).write_text(json.dumps(payload, indent=2) + "\n")
-    return rows, out, E2EStats(peak, reloads, len(canary_rows))
+    return rows, out, E2EStats(peak, reloads, len(canary_rows), reload_counts)
 
 
 @dataclass(frozen=True)
@@ -379,6 +416,7 @@ class E2EStats:
     resident_peak: int
     model_reloads: int
     canaries_total: int  # canary ledger rows in this database, all runs
+    reload_counts: dict[str, int]
 
 
 def selection_share(rows: list[E2ERow]) -> list[str]:
@@ -395,6 +433,12 @@ def selection_share(rows: list[E2ERow]) -> list[str]:
     return lines
 
 
+def _resident_line(peak: int, limit: int) -> str:
+    from bourse.runtime.resident import format_resident_peak
+
+    return format_resident_peak(peak, limit)
+
+
 def e2e_summary(rows: list[E2ERow], stats: "E2EStats", limit: int) -> list[str]:
     n = len(rows)
     return [
@@ -409,8 +453,10 @@ def e2e_summary(rows: list[E2ERow], stats: "E2EStats", limit: int) -> list[str]:
         f"{sum(r.subtasks_total for r in rows)}",
         f"tokens in {sum(r.tokens_in for r in rows)} out {sum(r.tokens_out for r in rows)}",
         f"total shadow_usd {sum(r.shadow_usd for r in rows):.6f}",
-        f"resident peak {stats.resident_peak} (limit {limit})",
-        f"model reloads {stats.model_reloads}",
+        _resident_line(stats.resident_peak, limit),
+        f"model reloads {stats.model_reloads} ("
+        + " ".join(f"{k}={n}" for k, n in stats.reload_counts.items())
+        + ")",
         f"canary rows in ledger {stats.canaries_total}",
         *(f"trace {r.dataset} repeat {r.repeat} {r.trace_id}" for r in rows),
     ]
