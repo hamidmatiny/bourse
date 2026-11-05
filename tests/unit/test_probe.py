@@ -5,7 +5,8 @@ from typing import Any
 import httpx
 import respx
 
-from bourse.llm.probe import RESIDENT_LIMIT_BYTES, run_probe
+from bourse.llm.probe import run_probe
+from bourse.runtime.resident import RESIDENT_LIMIT_BYTES
 from tests.unit.fakes import OLLAMA, make_client, ollama_submit, request_json
 
 

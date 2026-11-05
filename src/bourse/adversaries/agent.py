@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 import uvicorn
+from a2a.types import AgentCard
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
@@ -98,15 +99,15 @@ def _attack_cards(settings: Settings) -> dict[str, dict[str, Any]]:
             mcp=base_spec.mcp,
         )
 
-    def _signed(host: str, display: str, *, version: str = "1.0.0", url: str | None = None):
+    def _signed(
+        host: str, display: str, *, version: str = "1.0.0", url: str | None = None
+    ) -> AgentCard:
         origin = url or f"http://{host}.{VENDOR}:55520"
         card = build_card(_spec(host, display), origin)
         if version != "1.0.0":
             data = card_to_dict(sign_card(card, vendor_key, kid, jku))
             unsigned = {k: v for k, v in data.items() if k != "signatures"}
-            return sign_card(
-                card_from_dict({**unsigned, "version": version}), vendor_key, kid, jku
-            )
+            return sign_card(card_from_dict({**unsigned, "version": version}), vendor_key, kid, jku)
         return sign_card(card, vendor_key, kid, jku)
 
     control = _signed("control", "Card Attacks Control")

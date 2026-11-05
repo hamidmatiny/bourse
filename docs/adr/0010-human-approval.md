@@ -16,4 +16,4 @@ by a high-reputation agent, and being told about an abort. Unattended runs and C
 - Slack tokens are only read from `.env`; never committed.
 
 ## Status
-Accepted (Phase 0). SlackApprover: Phase 5.
+Accepted (Phase 0). SlackApprover + reinstatement: Phase 5c (ADR-0048).

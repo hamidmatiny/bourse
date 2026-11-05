@@ -4,6 +4,7 @@ Cancel is best-effort: the task may already have completed (TaskNotCancelableErr
 TaskNotFoundError) or the agent may be unreachable. Those must never abort the broker.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ from a2a.types import AgentCard, CancelTaskRequest, TaskNotCancelableError, Task
 CancelFn = Callable[[AgentCard, str, httpx.AsyncClient], Coroutine[Any, Any, None]]
 
 log = logging.getLogger(__name__)
+
+# Hard wall-clock bound on one best-effort CancelTask round trip.
+CANCEL_DEADLINE_S = 10.0
 
 
 @dataclass
@@ -61,8 +65,17 @@ class InFlight:
 
     async def _best_effort_cancel(self, handle: InFlightHandle) -> bool:
         try:
-            await self._cancel(handle.card, handle.a2a_task_id, handle.http)
+            async with asyncio.timeout(CANCEL_DEADLINE_S):
+                await self._cancel(handle.card, handle.a2a_task_id, handle.http)
             return True
+        except TimeoutError:
+            log.warning(
+                "cancel best-effort task_id=%s agent_id=%s: no reply within %.0fs",
+                handle.a2a_task_id,
+                handle.agent_id,
+                CANCEL_DEADLINE_S,
+            )
+            return False
         except (TaskNotCancelableError, TaskNotFoundError) as exc:
             log.warning(
                 "cancel best-effort task_id=%s agent_id=%s: %s",

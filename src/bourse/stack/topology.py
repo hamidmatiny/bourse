@@ -28,6 +28,18 @@ REGISTRY_PORT = 55300
 # register fresh (PENDING) and are admitted by exam; host mode keeps "bourse" (ADR-0034).
 COMPOSE_DB = "bourse_compose"
 METER_PORT = 55200
+APPROVER_PORT = 55310
+# Services allowed on bourse_host (ADR-0048). Agents / adversaries / MCP stay internal-only.
+HOST_NET_SERVICES = frozenset(
+    {
+        "approver",  # Slack Socket Mode (default Docker DNS; first-party code)
+        "meter",  # Ollama via host.docker.internal
+        "registry",  # published port for host CLI
+        "postgres",  # published port
+        "jaeger",  # published port
+        "otel-collector",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +181,18 @@ def nodes() -> list[Node]:
             port=METER_PORT,
             health_url=f"http://127.0.0.1:{METER_PORT}/v1/chat/completions",
         ),
+        Node(
+            "approver",
+            PREFIX + "22",
+            "approver",
+            command=["bourse", "approver", "serve", "--port", str(APPROVER_PORT)],
+            # bourse_host for Slack TCP; Docker default DNS (not egress-dns) — ADR-0048.
+            host_net=True,
+            ports=(f"127.0.0.1:{APPROVER_PORT}:{APPROVER_PORT}",),
+            port=APPROVER_PORT,
+            # /healthz returns 200 only when slack == connected (ADR-0048).
+            health_url=f"http://127.0.0.1:{APPROVER_PORT}/healthz",
+        ),
         *mcp,
         Node(
             "egress-dns",
@@ -243,6 +267,7 @@ def dnsmasq_conf() -> str:
         "bind-interfaces",
     ]
     lines += [f"server=/{name}/127.0.0.11" for name in allowlisted_names()]
+    # No Slack forwarders here: approver uses Docker default DNS on bourse_host (ADR-0048).
     lines.append(f"address=/#/{SINKHOLE_IP}")
     return "\n".join(lines) + "\n"
 
@@ -292,6 +317,11 @@ def _bourse_service(n: Node) -> dict[str, Any]:
         svc["restart"] = "no"
     if n.name == "meter":
         svc["extra_hosts"] = ["host.docker.internal:host-gateway"]
+    if n.name == "approver":
+        # No egress-dns dependency: approver uses Docker default DNS on bourse_host (ADR-0048).
+        svc["depends_on"] = {
+            "migrate": {"condition": "service_completed_successfully"},
+        }
     if n.name == "egress-dns":
         svc["user"] = "root"  # dnsmasq binds port 53
         svc["healthcheck"] = {
@@ -407,13 +437,21 @@ def env_files(
         "BOURSE_EXAM_TIMEOUT_S": str(get_settings().bourse_exam_timeout_s),
         "BOURSE_DEV_HOSTS": "",
         "OLLAMA_NUM_PARALLEL": str(ollama_num_parallel),
+        "BOURSE_IN_COMPOSE": "1",
     }
     out: dict[str, dict[str, str]] = {n.name: dict(common) for n in nodes() if n.command}
+    settings = get_settings()
+    approver_key = str(secrets.get("approver_key") or "")
+    approver_http = {
+        "BOURSE_APPROVER_URL": f"http://approver:{APPROVER_PORT}",
+        "BOURSE_APPROVER_KEY": approver_key,
+    }
     registry_extra = {
         "BOURSE_ADMIN_TOKEN": secrets["admin_token"],
         "BOURSE_HONEYTOKEN_SECRET": secrets["honeytoken_secret"],
         # Broker meter key: admission exams POST /budgets before each task (ADR-0041).
         "BOURSE_AGENT_KEY": keys["broker"],
+        **approver_http,
     }
     if exam_deadline_by_model:
         registry_extra["BOURSE_EXAM_DEADLINE_BY_MODEL"] = exam_deadline_by_model
@@ -433,7 +471,18 @@ def env_files(
         "BOURSE_HONEYTOKEN_SECRET": secrets["honeytoken_secret"],
         "BOURSE_OLLAMA_PS_URL": f"http://meter:{METER_PORT}/ollama/api/ps",
         "BOURSE_OLLAMA_PS_KEY": keys["broker"],
+        **approver_http,
     }
+    # Approver is the only service with Slack tokens (Socket Mode over bourse_host).
+    if "approver" in out:
+        out["approver"] |= {
+            "SLACK_BOT_TOKEN": settings.slack_bot_token.get_secret_value(),
+            "SLACK_APP_TOKEN": settings.slack_app_token.get_secret_value(),
+            "SLACK_CHANNEL_ID": settings.slack_channel_id.strip(),
+            "BOURSE_SLACK_APPROVERS": settings.bourse_slack_approvers.strip(),
+            "BOURSE_SLACK_TIMEOUT_S": str(settings.bourse_slack_timeout_s),
+            "BOURSE_APPROVER_KEY": approver_key,
+        }
     for n in [*agent_nodes(), *adversary_nodes()]:
         if n.agent is None:
             if n.name == "card-attacks":

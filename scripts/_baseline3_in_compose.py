@@ -9,6 +9,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+import anyio
+
 from bourse.broker.runner import broker_from_settings, intake, load_fixture
 from bourse.config import get_settings
 from bourse.contracts.broker import RunStatus
@@ -42,7 +44,9 @@ async def main(runs: int, summary_path: Path) -> int:
             else:
                 ar = report.abort_reason or "-"
                 aborts.append(f"{report.run_id} {report.status.value} abort_reason={ar}")
-                print(f"baseline {i + 1}/{runs} {report.status.value} abort_reason={ar}", flush=True)
+                print(
+                    f"baseline {i + 1}/{runs} {report.status.value} abort_reason={ar}", flush=True
+                )
                 break
         peak = session.monitor.peak
         print(session.monitor.summary(), flush=True)
@@ -51,8 +55,8 @@ async def main(runs: int, summary_path: Path) -> int:
         print(f"BASELINE_OK={ok}/{runs}", flush=True)
         print(f"BASELINE_WALL_S={time.monotonic() - t0:.1f}", flush=True)
         print(f"BASELINE_PEAK={peak}", flush=True)
-        if metrics and Path(metrics).exists():
-            for line in Path(metrics).read_text().splitlines():
+        if metrics and await anyio.Path(metrics).exists():
+            for line in (await anyio.Path(metrics).read_text()).splitlines():
                 if not line.strip():
                     continue
                 row = json.loads(line)
@@ -95,8 +99,8 @@ async def main(runs: int, summary_path: Path) -> int:
             for n, v in per.items()
         },
     }
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(json.dumps(payload, indent=2) + "\n")
+    await anyio.Path(summary_path.parent).mkdir(parents=True, exist_ok=True)
+    await anyio.Path(summary_path).write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {summary_path}", flush=True)
     return 0 if ok == runs else 1
 

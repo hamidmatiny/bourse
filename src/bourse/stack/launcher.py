@@ -53,12 +53,15 @@ def load_secrets() -> dict[str, Any]:
         data = json.loads(SECRETS_FILE.read_text())
     keys: dict[str, str] = data.setdefault("meter_keys", {})
     missing = [name for name in METER_CLIENTS if name not in keys]
-    if not missing and "admin_token" in data and "honeytoken_secret" in data:
+    need_write = bool(missing) or "admin_token" not in data or "honeytoken_secret" not in data
+    need_write = need_write or "approver_key" not in data
+    if not need_write:
         return data
     for name in missing:
         keys[name] = secrets.token_hex(24)
     data.setdefault("admin_token", secrets.token_hex(24))
     data.setdefault("honeytoken_secret", secrets.token_hex(32))
+    data.setdefault("approver_key", secrets.token_hex(24))
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(SECRETS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:

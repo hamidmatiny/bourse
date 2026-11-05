@@ -24,7 +24,11 @@ from bourse.config import get_settings
 from bourse.contracts.exam import ExamReport
 from bourse.registry.service import make_agent_id
 from bourse.runtime.resident import RESIDENT_LIMIT_BYTES, format_bytes_units
-from bourse.stack.activation import exam_failed_pending, print_exam_summary_table, registry_agent_rows
+from bourse.stack.activation import (
+    exam_failed_pending,
+    print_exam_summary_table,
+    registry_agent_rows,
+)
 from bourse.stack.launcher import admin_token
 
 ENV_DIR = Path("data/run/env")
@@ -225,7 +229,10 @@ def _ensure_registry() -> None:
         flush=True,
     )
     # write_compose_env reads settings.ollama_num_parallel — pass env so gate=1 is embedded.
-    env = {**dict(**{k: v for k, v in __import__("os").environ.items()}), "OLLAMA_NUM_PARALLEL": "1"}
+    env = {
+        **dict(**{k: v for k, v in __import__("os").environ.items()}),
+        "OLLAMA_NUM_PARALLEL": "1",
+    }
     try:
         subprocess.check_call(
             [
@@ -340,7 +347,9 @@ def unload_model(model: str) -> None:
         raise MeasureFailed(f"unload {model} failed: {exc}") from None
 
 
-def verify_ps_models(*, allowed: set[str] | None = None, forbidden: set[str] | None = None) -> list[str]:
+def verify_ps_models(
+    *, allowed: set[str] | None = None, forbidden: set[str] | None = None
+) -> list[str]:
     """Return live /api/ps model names; raise MeasureFailed if constraints violated."""
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -393,7 +402,9 @@ def patch_all_env_parallel(n: int) -> None:
     print(f"patched OLLAMA_NUM_PARALLEL={n} in {ENV_DIR}/*.env", flush=True)
 
 
-def run_exams(agent_keys: tuple[str, ...] = ALL_AGENT_KEYS) -> tuple[float, dict[str, ExamReport | None], list[SkillScore]]:
+def run_exams(
+    agent_keys: tuple[str, ...] = ALL_AGENT_KEYS,
+) -> tuple[float, dict[str, ExamReport | None], list[SkillScore]]:
     settings = get_settings()
     ids_map = _agent_ids(agent_keys)
     agent_ids = list(ids_map.values())
@@ -425,9 +436,7 @@ def run_exams(agent_keys: tuple[str, ...] = ALL_AGENT_KEYS) -> tuple[float, dict
             for aid, st, _ in focus:
                 rep = _fetch_report(client, base, aid)
                 reports[aid] = rep
-                if _fp(rep) and _fp(rep) != prior.get(aid, ""):
-                    fresh += 1
-                elif st == "ACTIVE" or aid in failed:
+                if (_fp(rep) and _fp(rep) != prior.get(aid, "")) or st == "ACTIVE" or aid in failed:
                     fresh += 1
             elapsed = time.monotonic() - started
             print(
@@ -518,7 +527,7 @@ def _sample_ps_peak(settings, peak: int) -> int:
             r.raise_for_status()
             total = sum(int(m.get("size") or 0) for m in r.json().get("models") or [])
             return max(peak, total)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return peak
 
 
@@ -558,9 +567,7 @@ def run_exams_with_peak(
             for aid, st, _ in focus:
                 rep = _fetch_report(client, base, aid)
                 reports[aid] = rep
-                if _fp(rep) and _fp(rep) != prior.get(aid, ""):
-                    fresh += 1
-                elif st == "ACTIVE" or aid in failed:
+                if (_fp(rep) and _fp(rep) != prior.get(aid, "")) or st == "ACTIVE" or aid in failed:
                     fresh += 1
             elapsed = time.monotonic() - started
             print(
@@ -646,7 +653,8 @@ def main() -> None:
         )
         results.append(b)
         print(
-            f"b combined_peak={b.combined_peak_bytes} ({format_bytes_units(b.combined_peak_bytes)}) "
+            f"b combined_peak={b.combined_peak_bytes} "
+            f"({format_bytes_units(b.combined_peak_bytes)}) "
             f"baseline={b.baseline_ok}/{b.baseline_n} exam_wall={b.exam_wall_s}s "
             f"baseline_wall={b.baseline_wall_s}s",
             flush=True,
@@ -683,13 +691,13 @@ def main() -> None:
     except MeasureFailed:
         restore_roster_env()
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         restore_roster_env()
         raise MeasureFailed(f"{type(exc).__name__}: {exc}") from None
     finally:
         try:
             restore_roster_env()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"restore warning: {exc}", file=sys.stderr, flush=True)
 
     payload = {

@@ -42,6 +42,7 @@ async def transition(
     reason: str,
     approval: ApprovalDecision | None = None,
     now: datetime | None = None,
+    agent_updates: dict[str, object] | None = None,
 ) -> StateTransition:
     agent = await repo.get_agent(agent_id)
     if agent is None:
@@ -57,7 +58,8 @@ async def transition(
         approval=approval,
         at=at,
     )
-    await repo.save_transition(
-        agent.model_copy(update={"state": to_state, "updated_at": at}), record
-    )
+    updates: dict[str, object] = {"state": to_state, "updated_at": at}
+    if agent_updates:
+        updates.update(agent_updates)
+    await repo.save_transition(agent.model_copy(update=updates), record)
     return record

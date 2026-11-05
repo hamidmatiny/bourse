@@ -20,12 +20,13 @@ from bourse.contracts.skills import SkillId
 from bourse.contracts.tasks import Subtask
 from bourse.contracts.trust import Severity, ViolationReport
 from bourse.grading.graders import grade
-from bourse.ledger.recorder import LedgerRecorder, agent_major
+from bourse.ledger.recorder import LedgerRecorder
 from bourse.ledger.repo import LedgerRepository
 from bourse.stack.smoke import build_input
 from bourse.trust.exam import SUBTASK_NAMES
 from bourse.trust.exam_bank import EXAM_NS, generate
 from bourse.trust.honeytokens import Honeytoken, derive
+from bourse.trust.reliability_epoch import effective_agent_major
 from bourse.trust.repo import TokenStore
 
 CANARY_FAIL = "CANARY_FAIL"
@@ -100,7 +101,7 @@ class CanaryRunner:
         graded = output is not None and grade(skill, output, ds.truth).passed
         row = await self.recorder.record(
             record,
-            major=agent_major(agent.current_version),
+            major=effective_agent_major(agent.current_version, agent.tags),
             spot_check_passed=bool(spot) and graded if spot is not None else None,
             kind="canary",
         )

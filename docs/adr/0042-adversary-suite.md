@@ -118,8 +118,24 @@ Observed A5a sole: exposure 5, first_bad 4, detect_delay 1, strikes 3. The third
 come from a canary (spot-checked) while only two *exposure* indices after first_bad are real
 e2e — that is expected under the current definition.
 
-**Phase 6 change (not done here):** count canary deliveries in `exposure` (and align
-`first_bad` / `detect_delay` to the same index base) so strikes and exposure stay 1:1.
+## Fix round 4 (Phase 5c, 2026-11-05): exposure counts canaries
+
+The table above and the "exposure = e2e only" definition are superseded:
+- The broker `Delegator` keeps an ordered delivery log (`Delivery` contract: agent, task id,
+  kind task|canary) of every A2A message actually sent. Attempts that stop before the send
+  (quarantine re-check, card fetch/drift, budget register) are not deliveries.
+- phase5 reports `exposure` = all deliveries to the adversary (tasks + canaries), plus
+  `exposure_real` (tasks) and `canaries`. `first_bad` and `detect_delay` index the same
+  all-deliveries sequence.
+- The behavior log matches task ids after normalizing the subtask segment, so canary/exam ids
+  (`run:pii:1`) and broker ids (`run:pii_detect:1`) key the same entry.
+- `strikes` is counted like the trust engine: SOFT in window W, current `rel_epoch` only
+  (ADR-0039 amendment).
+- Invariants added: `exposure == exposure_real + canaries`; a quarantined row whose behavior
+  log has a deviant event must resolve `first_bad`.
+- Observed failure this fixes (re-catch after reinstate): quarantined at exposure 2 (e2e only),
+  first deviant task was a canary `run-…:pii:1`, `first_bad` unresolved, strikes=1 < k=3.
+- The sleeper prefix is unchanged: canaries still do not consume it.
 
 ## Status
-Accepted (Phase 5b; fix round 3).
+Accepted (Phase 5b; fix round 3; fix round 4 in Phase 5c).

@@ -150,7 +150,10 @@ async def test_availability_gate_hides_from_search_not_get(
     client: httpx.AsyncClient, vendor_a: Party
 ) -> None:
     await _onboard(client, vendor_a)
-    body = {"vendor_domain": "vendor-a.local", "card": vendor_a.sign(load_card("honest-a-profiler.json"))}
+    body = {
+        "vendor_domain": "vendor-a.local",
+        "card": vendor_a.sign(load_card("honest-a-profiler.json")),
+    }
     resp = await client.post("/agents/register", json=body)
     assert resp.status_code == 201, resp.text
     await client.post(

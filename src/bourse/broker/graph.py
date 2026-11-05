@@ -17,6 +17,8 @@ import anyio.lowlevel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
+from bourse.approval.base import Approver
+from bourse.approval.triggers import notify_abort
 from bourse.broker.abort import normalize_abort_reason
 from bourse.broker.delegate import Delegator, RegistryClient, RunAborted, build_input
 from bourse.broker.planner import PlanResult, make_plan
@@ -109,6 +111,7 @@ class Broker:
     echo: Callable[[str], None] = field(default=lambda _line: None)
     ledger: LedgerRepository | None = None  # selection_decisions are persisted when set
     canaries: "CanaryRunner | None" = None
+    approver: Approver | None = None  # ABORT_NOTICE notify (ADR-0048)
     _watchdog: Watchdog | None = None
 
     def beat(self) -> None:
@@ -220,9 +223,7 @@ class Broker:
                 error_kind=f"dependency_not_completed:{','.join(sorted(blocked))}",
             )
         if self.breaker.tripped:
-            raise RunAborted(
-                normalize_abort_reason(self.breaker.reason) or "BREAKER: open"
-            )
+            raise RunAborted(normalize_abort_reason(self.breaker.reason) or "BREAKER: open")
         upstream: dict[SkillId, dict[str, Any]] = {}
         for aid in ancestors(dag, sub.id):
             output = done[aid].output
@@ -296,6 +297,8 @@ class Broker:
         wall_ms = (ended - run.started_at).total_seconds() * 1000
         reason = normalize_abort_reason(abort_reason) if status is RunStatus.ABORTED else None
         await self.runs.finish_run(run_id, status, ended, wall_ms, abort_reason=reason)
+        if reason is not None and self.approver is not None:
+            await notify_abort(self.approver, abort_reason=reason)
 
     # --- graph ---------------------------------------------------------------------------------
 

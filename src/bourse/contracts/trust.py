@@ -26,6 +26,10 @@ class Violation(BaseModel):
     agent_id: str = Field(min_length=1)
     evidence: str
     at: datetime
+    # Reliability epoch of the agent when the violation was stored (ADR-0039, ADR-0048).
+    # None on construction = the repository stamps the agent's current epoch at insert;
+    # rows read back always carry an int. SOFT strikes count only the current epoch.
+    rel_epoch: int | None = Field(default=None, ge=0)
 
 
 class ViolationReport(BaseModel):

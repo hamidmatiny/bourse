@@ -63,6 +63,11 @@ def _part_texts(parts: Any) -> tuple[list[str], int]:
     return texts, extra
 
 
+# Internal wall cap on top of the task deadline. Callers (Delegator, ExamRunner) apply tighter
+# caps of their own; this one bounds every other caller (smoke, tools) so no send can hang.
+SEND_CAP_GRACE_S = 30.0
+
+
 async def send_task(
     agent: str | AgentCard,
     skill_id: str,
@@ -73,6 +78,34 @@ async def send_task(
     on_task: Callable[[str], None] | None = None,
     *,
     bourse_kind: str = "task",
+) -> CallResult:
+    """Send one A2A task and await its result under a hard wall-clock deadline.
+
+    Raises TimeoutError after deadline_s + SEND_CAP_GRACE_S.
+    """
+    with anyio.fail_after(deadline_s + SEND_CAP_GRACE_S):
+        return await _send_task(
+            agent,
+            skill_id,
+            payload_json,
+            task_id,
+            deadline_s,
+            http_client,
+            on_task,
+            bourse_kind=bourse_kind,
+        )
+
+
+async def _send_task(
+    agent: str | AgentCard,
+    skill_id: str,
+    payload_json: Any,
+    task_id: str,
+    deadline_s: float,
+    http_client: httpx.AsyncClient | None,
+    on_task: Callable[[str], None] | None,
+    *,
+    bourse_kind: str,
 ) -> CallResult:
     started = time.monotonic()
     owns = http_client is None

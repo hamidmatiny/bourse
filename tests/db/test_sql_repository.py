@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from bourse.config import get_settings
 from bourse.contracts.approval import ApprovalDecision
-from bourse.contracts.registry import RegisterRequest, RejectReason
+from bourse.contracts.registry import RegisterRequest, RejectReason, StateTransition
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import TrustState
 from bourse.registry.repo import RevisionExists
@@ -121,6 +121,42 @@ async def test_register_and_revision_immutability(repo: SqlRepository) -> None:
     assert [v.kind for v in await repo.list_violations(PROFILER_ID)] == ["VERSION_REUSE"]
 
 
+async def test_violation_rel_epoch_stamped_from_agent_tags(repo: SqlRepository) -> None:
+    """violations.rel_epoch = agent's rel_epoch at insert (migration 0011, ADR-0039)."""
+    from bourse.contracts.trust import Severity, Violation
+    from bourse.trust.reliability_epoch import bump_rel_epoch
+
+    a = make_party("vendor-a.local")
+    service = await _service(repo, a)
+    card = load_card("honest-a-profiler.json")
+    outcome = await service.register(RegisterRequest(vendor_domain=a.domain, card=a.sign(card)))
+    assert outcome.accepted
+    now = datetime.now(UTC)
+
+    def vio(kind: str) -> Violation:
+        return Violation(
+            kind=kind, severity=Severity.SOFT, agent_id=PROFILER_ID, evidence="e", at=now
+        )
+
+    await repo.add_violation(vio("EPOCH0"))
+    agent = await repo.get_agent(PROFILER_ID)
+    assert agent is not None
+    await repo.save_transition(
+        agent.model_copy(update={"tags": bump_rel_epoch(agent.tags)}),
+        StateTransition(
+            agent_id=PROFILER_ID,
+            from_state=agent.state,
+            to_state=agent.state,
+            actor="test",
+            reason="bump epoch",
+            at=now,
+        ),
+    )
+    await repo.add_violation(vio("EPOCH1"))
+    got = [(v.kind, v.rel_epoch) for v in await repo.list_violations(PROFILER_ID)]
+    assert got == [("EPOCH0", 0), ("EPOCH1", 1)]
+
+
 async def test_fts_search_name_and_tags_only(repo: SqlRepository) -> None:
     a = make_party("vendor-a.local")
     b = make_party("vendor-b.local")
@@ -151,6 +187,8 @@ async def test_fts_search_name_and_tags_only(repo: SqlRepository) -> None:
 
 
 async def test_transitions_write_audit_rows(repo: SqlRepository) -> None:
+    from bourse.trust.reliability_epoch import bump_rel_epoch, reliability_epoch
+
     a = make_party("vendor-a.local")
     service = await _service(repo, a)
     await service.register(
@@ -160,8 +198,16 @@ async def test_transitions_write_audit_rows(repo: SqlRepository) -> None:
     await transition(repo, PROFILER_ID, TrustState.ACTIVE, actor="admin", reason="exam")
     await transition(repo, PROFILER_ID, TrustState.QUARANTINED, actor="registry", reason="hard")
     decision = ApprovalDecision(approved=True, by="operator", at=now, reason="fixed")
+    agent_q = await repo.get_agent(PROFILER_ID)
+    assert agent_q is not None
     await transition(
-        repo, PROFILER_ID, TrustState.ACTIVE, actor="admin", reason="reinstate", approval=decision
+        repo,
+        PROFILER_ID,
+        TrustState.ACTIVE,
+        actor="admin",
+        reason="reinstate",
+        approval=decision,
+        agent_updates={"tags": bump_rel_epoch(agent_q.tags)},
     )
     audit = await repo.list_transitions(PROFILER_ID)
     assert [(t.from_state, t.to_state) for t in audit] == [
@@ -172,6 +218,7 @@ async def test_transitions_write_audit_rows(repo: SqlRepository) -> None:
     assert audit[-1].approval == decision
     agent = await repo.get_agent(PROFILER_ID)
     assert agent is not None and agent.state is TrustState.ACTIVE
+    assert reliability_epoch(agent.tags) == 1
     engine = create_async_engine(URL)
     try:
         with pytest.raises(DBAPIError, match="append-only"):

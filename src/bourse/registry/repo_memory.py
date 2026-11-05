@@ -7,6 +7,7 @@ from bourse.contracts.registry import AgentRecord, CardRevision, StateTransition
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import TrustState, Violation
 from bourse.registry.repo import RevisionExists, VendorExists
+from bourse.trust.reliability_epoch import reliability_epoch
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -47,6 +48,10 @@ class InMemoryRepository:
         self._transitions.append(transition)
 
     async def add_violation(self, violation: Violation) -> None:
+        if violation.rel_epoch is None:
+            agent = self._agents.get(violation.agent_id)
+            epoch = reliability_epoch(agent.tags) if agent is not None else 0
+            violation = violation.model_copy(update={"rel_epoch": epoch})
         self._violations.append(violation)
 
     async def bump_aggregate(self, vendor_domain: str, hour: datetime, kind: str) -> int:

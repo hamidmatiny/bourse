@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 
@@ -16,7 +17,7 @@ def _ledger(
     *,
     state: DelegationState = DelegationState.COMPLETED,
     spot: bool | None = True,
-    kind: str = "canary",
+    kind: Literal["task", "canary"] = "canary",
 ) -> LedgerRow:
     return LedgerRow(
         run_id="run-1",

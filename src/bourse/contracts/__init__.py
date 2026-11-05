@@ -1,10 +1,17 @@
 """Typed contracts: the only interface between BOURSE components (ADR-0004)."""
 
-from bourse.contracts.approval import ApprovalDecision, ApprovalRequest, ApprovalTrigger
+from bourse.contracts.approval import (
+    ApprovalDecision,
+    ApprovalFacts,
+    ApprovalRequest,
+    ApprovalTrigger,
+    ViolationKindCount,
+)
 from bourse.contracts.broker import (
     CandidateScore,
     DelegationRecord,
     DelegationState,
+    Delivery,
     IntakeReport,
     RunRecord,
     RunStatus,
@@ -44,6 +51,7 @@ __all__ = [
     "AgentRecord",
     "ApiError",
     "ApprovalDecision",
+    "ApprovalFacts",
     "ApprovalRequest",
     "ApprovalTrigger",
     "BudgetSpec",
@@ -51,6 +59,7 @@ __all__ = [
     "CardRevision",
     "DelegationRecord",
     "DelegationState",
+    "Delivery",
     "Grade",
     "IntakeReport",
     "IntakeRequest",
@@ -80,5 +89,6 @@ __all__ = [
     "VendorKeys",
     "VerifyResult",
     "Violation",
+    "ViolationKindCount",
     "ViolationReport",
 ]

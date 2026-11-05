@@ -12,10 +12,10 @@ import typer
 
 from bourse import __version__
 from bourse.config import get_settings
-from bourse.stack.launcher import database_url as resolve_db_url
 from bourse.llm.ollama import DEFAULT_HTTP_TIMEOUT
 from bourse.llm.probe import run_probe
 from bourse.registry.attacks import DEFAULT_FIXTURES, format_table, run_phase1
+from bourse.stack.launcher import database_url as resolve_db_url
 
 A2A_SPEC_VERSION = "1.0"
 MCP_SPEC_VERSION = "2026-07-28"
@@ -40,6 +40,9 @@ ledger_app = typer.Typer(no_args_is_help=True, help="Delegation ledger.")
 egress_app = typer.Typer(no_args_is_help=True, help="Egress control (compose).")
 exam_app = typer.Typer(no_args_is_help=True, help="Admission exams.")
 db_app = typer.Typer(no_args_is_help=True, help="Database helpers.")
+trust_app = typer.Typer(no_args_is_help=True, help="Trust / reinstatement (ADR-0048).")
+approve_app = typer.Typer(no_args_is_help=True, help="Human approval (ADR-0048).")
+approver_app = typer.Typer(no_args_is_help=True, help="Compose Slack approver service (ADR-0048).")
 app.add_typer(keys_app, name="keys")
 app.add_typer(card_app, name="card")
 app.add_typer(registry_app, name="registry")
@@ -57,6 +60,9 @@ app.add_typer(ledger_app, name="ledger")
 app.add_typer(egress_app, name="egress")
 app.add_typer(exam_app, name="exam")
 app.add_typer(db_app, name="db")
+app.add_typer(trust_app, name="trust")
+app.add_typer(approve_app, name="approve")
+app.add_typer(approver_app, name="approver")
 
 
 def _pkg_version(name: str) -> str:
@@ -104,14 +110,20 @@ def probe(
         int | None,
         typer.Option(
             "--latency",
-            help="N isolated /api/chat samples per model; print p50/p95 and write latency-latest.json",
+            help=(
+                "N isolated /api/chat samples per model; print p50/p95 and write "
+                "latency-latest.json"
+            ),
         ),
     ] = None,
     memory: Annotated[
         bool,
         typer.Option(
             "--memory",
-            help="Measure resident bytes for candidate pairs + throwaway gemma4:e4b exams; write ADR-0045",
+            help=(
+                "Measure resident bytes for candidate pairs + throwaway gemma4:e4b exams; "
+                "write ADR-0045"
+            ),
         ),
     ] = False,
 ) -> None:
@@ -140,9 +152,7 @@ def probe(
 async def _probe_latency(settings: Any, n: int, out_dir: Path) -> int:
     from bourse.llm.latency import measure_latency, write_latency_report
 
-    models = list(
-        dict.fromkeys([settings.bourse_model_small, settings.bourse_model_large])
-    )
+    models = list(dict.fromkeys([settings.bourse_model_small, settings.bourse_model_large]))
     typer.echo(
         f"latency N={n} models={models} "
         f"OLLAMA_NUM_PARALLEL(config)={settings.ollama_num_parallel} "
@@ -254,26 +264,49 @@ def registry_serve(
     settings = get_settings()
     engine = create_async_engine(resolve_db_url(settings))
     client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0))
+    from bourse.approval.select import select_approver
+    from bourse.approval.triggers import wilson_lb_from_rows
+    from bourse.ledger.repo_sql import SqlLedgerRepository
+    from bourse.trust.engine import TrustEngine
+
+    repo = SqlRepository(engine)
+    ledger_repo = SqlLedgerRepository(engine)
+
+    async def _wilson(agent_id: str) -> float:
+        agent = await repo.get_agent(agent_id)
+        if agent is None:
+            return 0.0
+        rows = await ledger_repo.list_rows()
+        return wilson_lb_from_rows(rows, agent_id, agent.current_version)
+
+    trust = TrustEngine(
+        repo,
+        k=settings.bourse_trust_strikes,
+        window_s=settings.bourse_trust_window_s,
+        approver=select_approver(settings, tty=False, prefer_http=True),
+        wilson_lb_for=_wilson,
+    )
     service = RegistryService(
-        SqlRepository(engine),
+        repo,
         client,
         RegistryPolicy(dev_hosts=settings.dev_hosts),
         strike_k=settings.bourse_trust_strikes,
         strike_window_s=settings.bourse_trust_window_s,
         inline_per_hour=settings.bourse_inline_violations_per_hour,
+        engine=trust,
     )
     exams = None
     secret = settings.bourse_honeytoken_secret.get_secret_value().encode()
     if secret:
+        from bourse.agents.catalog import specs_from_settings
         from bourse.broker.delegate import MeterBudgetClient
+        from bourse.llm.latency import load_deadline_by_model
+        from bourse.meter.repo_sql import SqlMeterRepository
+        from bourse.registry.service import make_agent_id
         from bourse.stack.launcher import BROKER_METER_ID, meter_key
         from bourse.telemetry import setup_tracing, traced_async_client
         from bourse.trust.exam import ExamConfig, ExamRunner, ExamScheduler
         from bourse.trust.repo import SqlHoneytokenRepository
-
-        from bourse.agents.catalog import specs_from_settings
-        from bourse.llm.latency import load_deadline_by_model
-        from bourse.registry.service import make_agent_id
 
         # Prefer env (compose embeds probe results); fall back to latency-latest.json (host).
         deadline_by_model = dict(settings.exam_deadline_by_model)
@@ -304,6 +337,7 @@ def registry_serve(
         exam_http = traced_async_client(timeout=httpx.Timeout(max_task_deadline + 30))
         # Exam delegations need the same per-task meter budgets as the broker (ADR-0041).
         broker_meter = settings.bourse_agent_key.get_secret_value() or meter_key(BROKER_METER_ID)
+        usage_repo = SqlMeterRepository(engine)
         runner = ExamRunner(
             service.repo,
             exam_http,
@@ -316,13 +350,23 @@ def registry_serve(
                 deadline_s=settings.bourse_exam_deadline_s,
                 exam_timeout_s=settings.bourse_exam_timeout_s,
                 deadline_by_model=deadline_by_model,
+                contention_queue_fraction=settings.bourse_contention_queue_fraction,
             ),
             budgets=MeterBudgetClient(exam_http, settings.bourse_meter_url, broker_meter),
             task_max_tokens=settings.bourse_task_max_tokens,
             task_max_calls=settings.bourse_task_max_calls,
             model_for_agent=lambda aid: id_to_model.get(aid, settings.bourse_model_small),
+            usage_lookup=lambda task_id: usage_repo.list_usage(task_id=task_id),
+            echo=typer.echo,
         )
-        exams = ExamScheduler(runner)
+        typer.echo(
+            f"exam concurrency limit={settings.ollama_num_parallel} (OLLAMA_NUM_PARALLEL; ADR-0049)"
+        )
+        exams = ExamScheduler(
+            runner,
+            max_concurrent=settings.ollama_num_parallel,
+            echo=typer.echo,
+        )
     app_ = create_app(
         service,
         settings.bourse_admin_token.get_secret_value(),
@@ -346,11 +390,22 @@ def attacks_phase1(
 def attacks_phase5(
     runs: Annotated[int, typer.Option(help="e2e runs per ACTIVE adversary")] = 6,
     only: Annotated[str, typer.Option(help="Comma-separated scenario ids")] = "",
+    mode: Annotated[
+        str,
+        typer.Option(help="Filter modes: mixed, sole-provider, card (empty = all)"),
+    ] = "",
     reset_honest: Annotated[
         bool,
         typer.Option(
             "--reset-honest",
             help="Reinstates quarantined honest agents to ACTIVE before this invocation only",
+        ),
+    ] = False,
+    reuse_agent: Annotated[
+        bool,
+        typer.Option(
+            "--reuse-agent",
+            help="A5a/A5b: reuse ACTIVE registered identity (no re-register); for re-catch",
         ),
     ] = False,
 ) -> None:
@@ -363,9 +418,13 @@ def attacks_phase5(
         run_phase5,
         write_report,
     )
+    from bourse.stack.compose_guard import refuse_if_compose_host
+
+    refuse_if_compose_host("attacks phase5")
 
     settings = get_settings()
     ids = [p.strip() for p in only.split(",") if p.strip()] or None
+    modes = [p.strip() for p in mode.split(",") if p.strip()] or None
 
     def _infra_message(exc: BaseException) -> str | None:
         if isinstance(exc, InfraNotReady):
@@ -380,7 +439,13 @@ def attacks_phase5(
     async def go() -> int:
         try:
             report = await run_phase5(
-                settings, runs=runs, only=ids, echo=typer.echo, reset_honest=reset_honest
+                settings,
+                runs=runs,
+                only=ids,
+                modes=modes,
+                echo=typer.echo,
+                reset_honest=reset_honest,
+                reuse_agent=reuse_agent,
             )
         except InvariantViolation as exc:
             typer.echo(f"INVARIANT FAIL: {exc}", err=True)
@@ -536,6 +601,19 @@ def stack_up(
         raise typer.BadParameter("mode must be compose or host")
     if with_adversaries and mode != "compose":
         raise typer.BadParameter("--with-adversaries requires --mode compose")
+    if mode == "compose":
+        from bourse.stack.image_freshness import REBUILD_HINT, stale_compose_images
+
+        stale = stale_compose_images()
+        if stale:
+            typer.echo(
+                "stale compose image(s); "
+                + REBUILD_HINT
+                + " first:\n"
+                + "\n".join(f"  {s.line()}" for s in stale),
+                err=True,
+            )
+            raise typer.Exit(1)
     set_mode(mode)
     if mode == "compose":
         from bourse.stack.activation import dump_activation_diagnostics, wait_agents_active
@@ -546,7 +624,9 @@ def stack_up(
         if left_c or left_n:
             typer.echo(
                 "leftover bourse state; run `uv run bourse stack down` first:\n"
-                + "\n".join([*(f"  container {c}" for c in left_c), *(f"  network {n}" for n in left_n)]),
+                + "\n".join(
+                    [*(f"  container {c}" for c in left_c), *(f"  network {n}" for n in left_n)]
+                ),
                 err=True,
             )
             raise typer.Exit(1)
@@ -574,9 +654,7 @@ def stack_up(
         if wait_agents_active(settings, echo=typer.echo) != 0:
             dump_activation_diagnostics(typer.echo)
             raise typer.Exit(1)
-        adv = compose(
-            "--profile", "adversaries", "up", "-d", "--remove-orphans", check=False
-        )
+        adv = compose("--profile", "adversaries", "up", "-d", "--remove-orphans", check=False)
         typer.echo((adv.stdout + adv.stderr).strip())
         if adv.returncode != 0:
             raise typer.Exit(adv.returncode)
@@ -673,6 +751,32 @@ def _unexpected_exit(c: dict[str, Any]) -> bool:
     return state == "exited" or health == "unhealthy"
 
 
+def _print_approver_health_reason() -> None:
+    """Fetch published approver /healthz and print slack status (never token values)."""
+    from bourse.approval.redact import redact_secrets
+    from bourse.stack.topology import APPROVER_PORT
+
+    url = f"http://127.0.0.1:{APPROVER_PORT}/healthz"
+    try:
+        resp = httpx.get(url, timeout=2.0)
+        try:
+            body = resp.json()
+        except ValueError:
+            typer.echo(
+                f"approver /healthz status={resp.status_code} body_unparseable",
+                err=True,
+            )
+            return
+        slack = body.get("slack", "?")
+        detail = redact_secrets(str(body.get("detail", "") or ""))
+        typer.echo(
+            f"approver /healthz slack={slack} detail={detail or '(none)'}",
+            err=True,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"approver /healthz unreachable: {type(exc).__name__}", err=True)
+
+
 CREATED_TERMINAL_S = 20.0
 
 
@@ -695,6 +799,8 @@ def _wait_compose_healthy(timeout_s: float) -> int:
             c = dead[0]
             name = str(c.get("Service"))
             typer.echo(f"service {name} failed: {c.get('Status')}", err=True)
+            if name == "approver":
+                _print_approver_health_reason()
             logs = compose("logs", "--tail", "30", name, check=False)
             typer.echo((logs.stdout + logs.stderr).rstrip())
             return 1
@@ -726,6 +832,8 @@ def _wait_compose_healthy(timeout_s: float) -> int:
         if ps and not pending:
             return _compose_status()
         if elapsed >= timeout_s:
+            if "approver" in pending:
+                _print_approver_health_reason()
             return _compose_status()
         time.sleep(5)
 
@@ -783,16 +891,16 @@ def stack_wait_active(
     timeout: Annotated[
         float | None,
         typer.Option(
-            help="Seconds (default: exam_timeout_s + 120). EXAM_FAILED fails immediately."
+            help="Seconds (default: computed from pending exam task count). "
+            "EXAM_FAILED fails immediately."
         ),
     ] = None,
 ) -> None:
     """Poll until every registered agent is ACTIVE; dump diagnostics on failure."""
-    from bourse.stack.activation import dump_activation_diagnostics, exam_wait_s, wait_agents_active
+    from bourse.stack.activation import dump_activation_diagnostics, wait_agents_active
 
     settings = get_settings()
-    limit = exam_wait_s(settings) if timeout is None else float(timeout)
-    code = wait_agents_active(settings, timeout_s=limit, echo=typer.echo)
+    code = wait_agents_active(settings, timeout_s=timeout, echo=typer.echo)
     if code != 0:
         dump_activation_diagnostics(typer.echo)
     raise typer.Exit(code)
@@ -1228,13 +1336,31 @@ def scores_cmd() -> None:
             rows = await SqlLedgerRepository(engine).list_rows()
         finally:
             await engine.dispose()
-        out = [["agent", "skill", "major", "s", "f", "wilson_lb", "ewma_usd", "ewma_wall_s"]]
+        from bourse.trust.reliability_epoch import (
+            card_major_from_encoded,
+            rel_epoch_from_major,
+        )
+
+        out = [
+            [
+                "agent",
+                "skill",
+                "major",
+                "rel_epoch",
+                "s",
+                "f",
+                "wilson_lb",
+                "ewma_usd",
+                "ewma_wall_s",
+            ]
+        ]
         for sc in scores(rows, settings.bourse_select_ewma_alpha):
             out.append(
                 [
                     sc.agent_id,
                     sc.skill.value,
-                    str(sc.agent_major),
+                    str(card_major_from_encoded(sc.agent_major)),
+                    str(rel_epoch_from_major(sc.agent_major)),
                     str(sc.s),
                     str(sc.f),
                     f"{sc.wilson_lb:.4f}",
@@ -1328,6 +1454,164 @@ def ledger_export(
         return 0
 
     raise typer.Exit(asyncio.run(export()))
+
+
+@approver_app.command("serve")
+def approver_serve(
+    host: Annotated[str, typer.Option(help="Default: BOURSE_BIND_HOST")] = "",
+    port: Annotated[int, typer.Option()] = 55310,
+    stub_socket: Annotated[
+        bool,
+        typer.Option(
+            "--stub-socket",
+            help="In-process Socket Mode stub (no Slack network); for tests",
+        ),
+    ] = False,
+) -> None:
+    """SlackApprover Socket Mode + HTTP API on one asyncio loop (ADR-0048)."""
+    from bourse.approval.service import serve as serve_approver
+
+    settings = get_settings()
+    serve_approver(
+        host=host or settings.bourse_bind_host,
+        port=port,
+        stub_socket=stub_socket,
+    )
+
+
+@approve_app.command("test")
+def approve_test(
+    timeout: Annotated[
+        float, typer.Option("--timeout", help="Seconds to wait; timeout -> deny")
+    ] = 900.0,
+    require_slack: Annotated[
+        bool,
+        typer.Option("--require-slack", help="Exit 1 unless SlackApprover is selected"),
+    ] = False,
+    expect: Annotated[
+        str,
+        typer.Option("--expect", help="Operator banner only: approve | deny | none"),
+    ] = "approve",
+) -> None:
+    """Send a structured test approval and wait for Approve/Deny (ADR-0048)."""
+    from bourse.approval.facts import make_request
+    from bourse.approval.http_client import HttpApprover
+    from bourse.approval.select import missing_slack_env, select_host_approver
+    from bourse.approval.slack import SlackApprover
+    from bourse.contracts.approval import ApprovalFacts, ApprovalTrigger
+
+    settings = get_settings()
+    approver = select_host_approver(settings)
+    if require_slack and isinstance(approver, HttpApprover):
+        health = _approver_slack_health()
+        if health != "connected":
+            typer.echo(
+                f"SlackApprover required (--require-slack); compose approver slack={health}",
+                err=True,
+            )
+            raise typer.Exit(1)
+    elif require_slack and not isinstance(approver, SlackApprover):
+        missing = missing_slack_env(settings)
+        typer.echo(
+            "SlackApprover required (--require-slack); "
+            f"got {type(approver).__name__}; missing {', '.join(missing) or '(none)'}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    facts = ApprovalFacts(
+        agent_id="approve-test",
+        vendor="bourse.test",
+        exam_n=0,
+        exam_total=0,
+        strikes=0,
+        exposure=0,
+    )
+    req = make_request(ApprovalTrigger.REINSTATE_AGENT, facts)
+
+    async def go() -> int:
+        if isinstance(approver, SlackApprover):
+            await approver.start()
+        try:
+            from bourse.trust.reinstate_client import click_banner
+
+            typer.echo(click_banner(req.request_id, req.trigger.value, "approve-test", expect))
+            decision = await approver.request(req, timeout)
+        finally:
+            if isinstance(approver, SlackApprover):
+                await approver.stop()
+            if isinstance(approver, HttpApprover):
+                await approver.aclose()
+        typer.echo(
+            f"approved={decision.approved} by={decision.by} "
+            f"reason={decision.reason} at={decision.at.isoformat()}"
+        )
+        return 0 if decision.approved else 1
+
+    raise typer.Exit(asyncio.run(go()))
+
+
+def _approver_slack_health() -> str:
+    from bourse.stack.topology import APPROVER_PORT
+
+    try:
+        resp = httpx.get(f"http://127.0.0.1:{APPROVER_PORT}/healthz", timeout=5.0)
+        return str(resp.json().get("slack", "unknown"))
+    except (httpx.HTTPError, ValueError):
+        return "unreachable"
+
+
+@trust_app.command("reinstate")
+def trust_reinstate(
+    agent_id: Annotated[str, typer.Argument(help="Agent id (must be QUARANTINED)")],
+    reason: Annotated[str, typer.Option("--reason", help="Operator reason")] = "",
+    timeout: Annotated[
+        float | None,
+        typer.Option("--timeout", help="Approval wait seconds (default: BOURSE_SLACK_TIMEOUT_S)"),
+    ] = None,
+    expect: Annotated[
+        str,
+        typer.Option("--expect", help="Operator banner only: approve | deny | none"),
+    ] = "approve",
+) -> None:
+    """Host CLI: registry reinstate-exam -> Slack approval -> registry apply (ADR-0048)."""
+    from bourse.approval.http_client import HttpApprover
+    from bourse.approval.select import select_host_approver
+    from bourse.approval.slack import SlackApprover
+    from bourse.stack.launcher import admin_token
+    from bourse.trust.reinstate_client import host_reinstate
+
+    if not reason.strip():
+        raise typer.BadParameter("--reason is required")
+    settings = get_settings()
+    timeout_s = float(timeout) if timeout is not None else float(settings.bourse_slack_timeout_s)
+    base = settings.bourse_registry_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {admin_token(settings)}"}
+    approver = select_host_approver(settings)
+
+    async def go() -> int:
+        if isinstance(approver, SlackApprover):
+            await approver.start()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as http:
+                result = await host_reinstate(
+                    http,
+                    base,
+                    headers,
+                    agent_id,
+                    approver,
+                    reason=reason,
+                    timeout_s=timeout_s,
+                    echo=typer.echo,
+                    expect=expect,
+                )
+        finally:
+            if isinstance(approver, SlackApprover):
+                await approver.stop()
+            if isinstance(approver, HttpApprover):
+                await approver.aclose()
+        return result.rc
+
+    raise typer.Exit(asyncio.run(go()))
 
 
 if __name__ == "__main__":

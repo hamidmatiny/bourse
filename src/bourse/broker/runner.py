@@ -189,6 +189,8 @@ async def broker_from_settings(
                 if policy == "prior"
                 else MeasuredPolicy(measured_config(settings), priors, ledger)
             )
+            from bourse.approval.select import select_approver
+
             broker = Broker(
                 planner_llm=planner_llm_factory(
                     settings, http, meter_key(BROKER_METER_ID), GLOBAL_BREAKER
@@ -205,6 +207,8 @@ async def broker_from_settings(
                 heartbeat_timeout_s=deadline_s + DEADLINE_GRACE_S + HEARTBEAT_SLACK_S,
                 echo=echo,
                 ledger=ledger,
+                # ABORT_NOTICE via compose HttpApprover when URL+key set (ADR-0048).
+                approver=select_approver(settings, tty=False, prefer_http=True),
             )
             delegator.heartbeat = broker.beat
             secret = settings.bourse_honeytoken_secret.get_secret_value() or str(

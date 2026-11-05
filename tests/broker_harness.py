@@ -52,6 +52,7 @@ from bourse.llm.submit_tool import ChatClient
 from bourse.mcp_servers.usage import InMemoryToolUsageRepository
 from bourse.meter.repo import InMemoryMeterRepository
 from bourse.registry.app import create_app
+from bourse.registry.repo import Repository
 from bourse.registry.service import RegistryPolicy
 from bourse.registry.state import transition
 from bourse.runtime.breaker import CircuitBreaker
@@ -233,12 +234,14 @@ class BrokerBed:
     register_agents: bool = True  # False: served but not registered
     canary_every: int | None = None  # set -> broker sends canaries (ADR-0037)
     tokens: InMemoryHoneytokenRepository = field(default_factory=InMemoryHoneytokenRepository)
+    repo: Repository | None = None  # None -> InMemoryRepository; SqlRepository in db tests
 
     async def setup(self) -> "BrokerBed":
         parties = {a.party.domain: a.party for a in self.agents}
         self.http = traced_async_client(transport=self.transport, timeout=30)
         service = await make_service(
             *parties.values(),
+            repo=self.repo,
             client=self.http,
             policy=RegistryPolicy(dev_hosts=frozenset(a.host for a in self.agents)),
         )

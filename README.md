@@ -76,7 +76,8 @@ flowchart LR
 | 2b | Five agents, graders, stack launcher, smoke run | `183ab27` | 367 unit, 6 db, 11 live passed; smoke 18/18 graded passed; 20,532 tokens in / 3,070 out |
 | 3 | Broker: planner, selector, card-drift-checked A2A delegation, resumable runs | `e19990a` | 393 unit, 10 db, 12 live passed; e2e runs succeeded 3/3, planner_used llm 3/3, fallbacks 0, subtasks graded passed 15/15; 9,293 tokens in / 1,726 out |
 | 4 | Measured ledger, spot-check reliability, measured selection with exploration, OTel, resident memory guard | Phase 4 commit | 446 unit, 19 db, 12 live passed; e2e --repeat 3: runs succeeded 9/9, exploration picks 2, spot-check failures 0/45, subtasks graded passed 45/45; 33,148 tokens in / 5,854 out; shadow_usd 0.009430; resident peak 25,628,315,882 |
-| 5 | Trust runtime, adversaries A4–A8, Slack approver | – | planned |
+| 5a–5b | Trust runtime, adversaries A4–A8 | `5c48b5b` | see Phase 5b acceptance |
+| 5c | SlackApprover + reinstatement | – | A5a caught (SPOTCHECK, exposure 6, first_bad 4, delay 2, strikes 3, harmed 0); reinstate without reset-behavior = exam 0/5 (“turned sleeper”); Deny/Approve after `/bourse/reset-behavior` + `--reuse-agent` re-catch — see `scripts/acceptance_5c.sh` + ADR-0048 |
 | 6 | Bench harness, Executor pools | – | planned |
 | 7 | `--final` run, RESULTS.md | – | planned |
 
@@ -160,6 +161,35 @@ bash scripts/acceptance_5b.sh
 # equivalent core step: uv run bourse stack up --mode compose --with-adversaries
 ```
 
+### Slack approver (Phase 5c, ADR-0048)
+
+Create a Slack app (Socket Mode). Bot scopes: `chat:write` (add `channels:read` if you want
+API channel listing). App-level token: `connections:write`. Enable Interactivity. Invite the bot
+to a channel. Put tokens in **repo-root `.env`** (gitignored; copy from `.env.example`):
+
+| Variable | What it is |
+|---|---|
+| `SLACK_BOT_TOKEN` | Bot User OAuth Token (`xoxb-…`) |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-…`, scope `connections:write`) |
+| `SLACK_CHANNEL_ID` | Channel id (`C…`), not `#name` |
+| `BOURSE_SLACK_APPROVERS` | Your Slack member id (`U…`) |
+| `BOURSE_SLACK_TIMEOUT_S` | Approval wait seconds (default 900) |
+
+Do not put User OAuth (`xoxp`), client secret, signing secret, or verification token in `.env`.
+
+Compose runs an `approver` service on `bourse_host` + `bourse_internal` (Slack Socket Mode +
+HTTP for broker/registry). Host commands that need agent DNS refuse with
+`docker compose run --rm broker bourse …`. Reinstatement is host-driven against the registry API.
+
+```sh
+bash scripts/acceptance_5c.sh
+# or manually:
+uv run bourse approve test --require-slack   # must select SlackApprover; click in Slack
+uv run bourse trust reinstate sleeper-loud@vendor-x.local --reason "…"
+```
+
+Live Slack pytest (excluded by default): `uv run pytest -m slack`.
+
 Host mode (`bourse stack up --mode host`) runs the same services as local processes on the
 ports below and prints "WARNING: egress not enforced in host mode". Other commands:
 `bourse run`, `bourse scores`, `bourse ledger show|export`, `bourse runs show|resume`,
@@ -167,7 +197,7 @@ ports below and prints "WARNING: egress not enforced in host mode". Other comman
 
 Tests: `uv run pytest` (unit, no services), `uv run pytest -m db` (Postgres),
 `uv run pytest -m live` (Ollama and the host-mode stack), `uv run pytest -m compose` (the
-compose stack).
+compose stack), `uv run pytest -m slack` (live Slack click).
 
 Host ports (registry, Postgres, Jaeger and the OTel collector are also published in compose
 mode; agents never are):
@@ -201,7 +231,7 @@ mode; agents never are):
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): hard rules and phase plan.
-- [docs/adr/](docs/adr/README.md): architecture decision records (through ADR-0047).
+- [docs/adr/](docs/adr/README.md): architecture decision records (through ADR-0048).
 
 ## License
 

@@ -25,7 +25,9 @@ def test_normalize_maps_resident_free_text() -> None:
 
 
 def test_normalize_breaker_and_watchdog_and_wall() -> None:
-    assert normalize_abort_reason("HTTP 402: credit balance") == f"{BREAKER}: HTTP 402: credit balance"
+    assert (
+        normalize_abort_reason("HTTP 402: credit balance") == f"{BREAKER}: HTTP 402: credit balance"
+    )
     assert normalize_abort_reason("watchdog: heartbeat stale") == f"{WATCHDOG}: heartbeat stale"
     assert normalize_abort_reason("wall budget exceeded") == f"{WALL_BUDGET}: wall budget exceeded"
 

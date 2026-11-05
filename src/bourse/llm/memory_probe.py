@@ -106,9 +106,7 @@ async def _exam_sized_call(
     r.raise_for_status()
 
 
-async def _ps_models(
-    client: httpx.AsyncClient, base_url: str
-) -> list[tuple[str, int]]:
+async def _ps_models(client: httpx.AsyncClient, base_url: str) -> list[tuple[str, int]]:
     r = await client.get(f"{base_url.rstrip('/')}/api/ps")
     r.raise_for_status()
     out: list[tuple[str, int]] = []
@@ -170,7 +168,7 @@ async def measure_pair(settings: Settings, model_a: str, model_b: str) -> PairMe
                 loaded_names=names,
                 error=err,
             )
-    except Exception as exc:  # noqa: BLE001 — probe must record every failure
+    except Exception as exc:
         return PairMemoryRow(
             model_a=model_a,
             model_b=model_b,
@@ -188,8 +186,7 @@ async def measure_all_pairs(settings: Settings) -> list[PairMemoryRow]:
         print(
             f"memory-probe: {a}+{b} resident={row.resident_bytes} bytes "
             f"({format_bytes_units(row.resident_bytes)}) under_limit={row.under_limit} "
-            f"loaded={list(row.loaded_names)}"
-            + (f" error={row.error}" if row.error else ""),
+            f"loaded={list(row.loaded_names)}" + (f" error={row.error}" if row.error else ""),
             flush=True,
         )
         rows.append(row)
@@ -327,7 +324,11 @@ def _wait_exams(
     prior_fingerprints: dict[str, str],
 ) -> dict[str, Any]:
     """Poll until each agent leaves PENDING (or gets a new exam-result fingerprint)."""
-    from bourse.stack.activation import exam_failed_pending, print_exam_summary_table, registry_agent_rows
+    from bourse.stack.activation import (
+        exam_failed_pending,
+        print_exam_summary_table,
+        registry_agent_rows,
+    )
 
     base = settings.bourse_registry_url.rstrip("/")
     started = time.monotonic()
@@ -344,11 +345,8 @@ def _wait_exams(
                 report = _fetch_report(client, base, aid)
                 done[aid] = report
                 fp = _report_fingerprint(report)
-                if fp and fp != prior_fingerprints.get(aid, ""):
-                    fresh += 1
-                elif st == "ACTIVE":
-                    fresh += 1
-                elif aid in failed:
+                changed = bool(fp) and fp != prior_fingerprints.get(aid, "")
+                if changed or st == "ACTIVE" or aid in failed:
                     fresh += 1
             elapsed = time.monotonic() - started
             print(
@@ -420,7 +418,9 @@ def _rows_from_reports(
     return out
 
 
-def run_e4b_throwaway_exams(settings: Settings, *, timeout_s: float | None = None) -> list[E4bExamRow]:
+def run_e4b_throwaway_exams(
+    settings: Settings, *, timeout_s: float | None = None
+) -> list[E4bExamRow]:
     """Recreate three agents on gemma4:e4b, force PENDING, run admission exams, restore roster."""
     from bourse.stack.activation import exam_wait_s, registry_agent_rows
 
@@ -437,21 +437,15 @@ def run_e4b_throwaway_exams(settings: Settings, *, timeout_s: float | None = Non
 
     base = settings.bourse_registry_url.rstrip("/")
     with httpx.Client(timeout=30.0) as client:
-        prior = {
-            aid: _report_fingerprint(_fetch_report(client, base, aid)) for aid in agent_ids
-        }
+        prior = {aid: _report_fingerprint(_fetch_report(client, base, aid)) for aid in agent_ids}
     _force_pending(agent_ids)
     _start_exams(settings, agent_ids)
-    reports = _wait_exams(
-        settings, set(agent_ids), timeout_s=limit, prior_fingerprints=prior
-    )
+    reports = _wait_exams(settings, set(agent_ids), timeout_s=limit, prior_fingerprints=prior)
 
     with httpx.Client(timeout=10.0) as client:
         states = {
             aid: st
-            for aid, st, _ in registry_agent_rows(
-                client, settings.bourse_registry_url.rstrip("/")
-            )
+            for aid, st, _ in registry_agent_rows(client, settings.bourse_registry_url.rstrip("/"))
         }
     rows = _rows_from_reports(reports, states)
     for row in rows:
@@ -535,22 +529,26 @@ def write_adr_0045(
             "",
             "## Throwaway admission exams on `gemma4:e4b` only",
             "",
-            "Agents recreated with `BOURSE_MODEL_SMALL=gemma4:e4b` in compose env files (not committed).",
+            "Agents recreated with `BOURSE_MODEL_SMALL=gemma4:e4b` in compose env files "
+            "(not committed).",
             "Registry rows forced PENDING, admission exams re-run, then models restored to",
-            f"`{ROSTER_SMALL_MODEL}` and state forced ACTIVE. Skills: profiler / pii-fast / normalizer.",
+            f"`{ROSTER_SMALL_MODEL}` and state forced ACTIVE. "
+            "Skills: profiler / pii-fast / normalizer.",
             "",
             "| agent | skill | n/N | state | model |",
             "|---|---|---|---|---|",
         ]
     )
-    for r in e4b_rows:
+    for e in e4b_rows:
         lines.append(
-            f"| `{r.agent_key}` | `{r.skill}` | {r.n_passed}/{r.n_total} | {r.state} | `{r.model}` |"
+            f"| `{e.agent_key}` | `{e.skill}` | {e.n_passed}/{e.n_total} | {e.state} "
+            f"| `{e.model}` |"
         )
     lines.extend(
         [
             "",
-            f"Written at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} by `bourse probe --memory`.",
+            f"Written at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+            "by `bourse probe --memory`.",
             "",
         ]
     )

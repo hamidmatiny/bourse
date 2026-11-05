@@ -80,7 +80,9 @@ def unexpected_loaded_models(
         if isinstance(m, LoadedModel):
             name, size = m.name, int(m.size)
         else:
-            name, size = str(m.get("name") or ""), int(m.get("size") or 0)
+            raw_size = m.get("size")
+            name = str(m.get("name") or "")
+            size = int(raw_size) if isinstance(raw_size, int | float | str) and raw_size else 0
         if name and name not in allowed:
             out.append((name, size))
     return out
@@ -96,9 +98,7 @@ def warn_unexpected_loaded_models(
     unexpected = unexpected_loaded_models(models, allowed)
     if unexpected:
         parts = ", ".join(f"{n}={s}" for n, s in unexpected)
-        echo(
-            f"WARNING: /api/ps has models outside roster {sorted(allowed)}: {parts}"
-        )
+        echo(f"WARNING: /api/ps has models outside roster {sorted(allowed)}: {parts}")
     return unexpected
 
 
@@ -158,9 +158,7 @@ class ResidentMonitor:
                 self._record(kind, name)
         self._models = current
 
-    def _record(
-        self, kind: ReloadKind, name: str, *, counts_as_reload: bool = True
-    ) -> None:
+    def _record(self, kind: ReloadKind, name: str, *, counts_as_reload: bool = True) -> None:
         self.events.append(ReloadEvent(kind, name))
         if counts_as_reload:
             self.reloads += 1
@@ -188,9 +186,7 @@ class ResidentMonitor:
                 )
             )
 
-    def _sample_line(
-        self, total: int, models: Sequence[LoadedModel] | None
-    ) -> dict[str, object]:
+    def _sample_line(self, total: int, models: Sequence[LoadedModel] | None) -> dict[str, object]:
         line: dict[str, object] = {
             "at": datetime.now(UTC).isoformat(),
             "resident_bytes": total,

@@ -23,6 +23,7 @@ from bourse.broker.spotcheck import spot_check
 from bourse.contracts.broker import (
     DelegationRecord,
     DelegationState,
+    Delivery,
     SelectionDecision,
     SubtaskResult,
     SubtaskStatus,
@@ -34,12 +35,13 @@ from bourse.contracts.skills_io import SKILL_IO, DatasetRef, ReportIn
 from bourse.contracts.tasks import Subtask
 from bourse.contracts.trust import Severity, TrustState, ViolationReport
 from bourse.crypto.jcs import card_from_dict, payload_digest
-from bourse.ledger.recorder import LedgerRecorder, agent_major
+from bourse.ledger.recorder import LedgerRecorder
 from bourse.registry.fetch import FetchFailed, fetch_card
 from bourse.runtime.breaker import CircuitBreaker
 from bourse.runtime.deadline import DeadlineExceeded, deadline
 from bourse.stack.smoke import send_task
 from bourse.telemetry import tracer
+from bourse.trust.reliability_epoch import effective_agent_major
 
 MAX_ATTEMPTS = 2
 # The agent enforces deadline_s itself; the broker's wall-clock deadline adds this margin for
@@ -175,6 +177,8 @@ class Delegator:
         self._input_rounds: dict[str, int] = {}
         self._usage_lookup = usage_lookup
         self._contention_fraction = contention_queue_fraction
+        # Ordered log of A2A messages actually sent (tasks + canaries); phase5 exposure.
+        self.deliveries: list[Delivery] = []
 
     async def run_subtask(
         self,
@@ -219,7 +223,9 @@ class Delegator:
                     span.set_attribute("detail", detail[:200])
                 if self.ledger is not None:
                     row = await self.ledger.record(
-                        record, major=agent_major(agent.current_version), spot_check_passed=spot
+                        record,
+                        major=effective_agent_major(agent.current_version, agent.tags),
+                        spot_check_passed=spot,
                     )
                     span.set_attribute("tokens_in", row.tokens_in)
                     span.set_attribute("tokens_out", row.tokens_out)
@@ -310,6 +316,20 @@ class Delegator:
             handle = InFlightHandle(agent.agent_id, card, a2a_id, self.http)
             self.inflight.add(handle)
 
+        self.deliveries.append(
+            Delivery(
+                agent_id=agent.agent_id,
+                task_id=task_id,
+                kind=(
+                    "canary"
+                    if bourse_kind == "canary"
+                    else "exam"
+                    if bourse_kind == "exam"
+                    else "task"
+                ),
+                at=datetime.now(UTC),
+            )
+        )
         try:
             try:
                 async with deadline(self.deadline_s + self.grace_s):

@@ -41,7 +41,7 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0036](0036-card-lint.md) | Card lint | 5a |
 | [0037](0037-admission-exam-canaries.md) | Admission exam, canaries, exam/bench disjointness | 5a |
 | [0038](0038-num-ctx-single-source.md) | num_ctx single source | 5a |
-| [0039](0039-trust-engine-strike-policy.md) | Trust engine and strike policy | 5b |
+| [0039](0039-trust-engine-strike-policy.md) | Trust engine and strike policy (strikes per rel_epoch, 5c) | 5b |
 | [0040](0040-input-required-policy.md) | INPUT_REQUIRED closed schemas | 5b |
 | [0041](0041-per-task-meter-budgets.md) | Per-task meter budgets and usage misreport | 5b |
 | [0042](0042-adversary-suite.md) | Adversary suite A4-A8, methodology, known gaps | 5b |
@@ -49,3 +49,6 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0044](0044-reload-classification-keep-alive.md) | Reload classification and keep_alive | 5b |
 | [0046](0046-resident-growth-candidates.md) | Measured model-roster options (a–d); candidate d selected | 5b |
 | [0047](0047-single-model-roster.md) | Single-model roster + timeout ordering (supersedes 0021 models) | 5b |
+| [0048](0048-slack-approver-reinstatement.md) | SlackApprover (Socket Mode) + reinstatement flow | 5c |
+| [0049](0049-exam-infra-attribution.md) | Exam INFRA attribution, INCONCLUSIVE, global exam concurrency | 5c |
+| [0050](0050-stale-image-guard.md) | Stale-image guard on compose stack up | 5c |

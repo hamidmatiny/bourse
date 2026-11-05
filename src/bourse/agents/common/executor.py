@@ -28,7 +28,7 @@ from bourse.contracts.skills_io import SKILL_IO
 from bourse.llm.router import AllProvidersFailed
 from bourse.llm.submit_tool import SubmitFailed
 from bourse.mcp_adapter.adapter import ToolBudgetExceeded, ToolCallFailed, ToolResultInvalid
-from bourse.runtime.breaker import BreakerOpen, ProviderHTTPError
+from bourse.runtime.breaker import BreakerOpen, CircuitBreaker, ProviderHTTPError, Verdict
 from bourse.runtime.budget import BudgetExceeded
 from bourse.runtime.deadline import DeadlineExceeded, deadline
 
@@ -36,6 +36,41 @@ from bourse.runtime.deadline import DeadlineExceeded, deadline
 def _validation_detail(exc: ValidationError) -> str:
     fields = [".".join(str(p) for p in e["loc"]) + ":" + e["type"] for e in exc.errors()[:10]]
     return "; ".join(fields)
+
+
+def _chain(exc: BaseException, depth: int = 5) -> list[BaseException]:
+    out: list[BaseException] = []
+    cur: BaseException | None = exc
+    while cur is not None and len(out) < depth and cur not in out:
+        out.append(cur)
+        cur = cur.__cause__ or cur.__context__
+    return out
+
+
+def _openai_kind(exc: BaseException) -> str | None:
+    """Map openai SDK errors (CrewAI's LLM client, ADR-0049) to an error kind.
+
+    429 without billing/quota wording, 5xx, connection errors and client timeouts are the
+    meter/provider being busy or down: `llm_unavailable` (INFRA for exams). 401/402/403 and
+    billing/quota bodies are breaker-class (AGENTS.md rule 6): `provider_auth`, never INFRA.
+    """
+    try:
+        import openai
+    except ImportError:  # pragma: no cover - openai ships with crewai
+        return None
+    for item in _chain(exc):
+        if isinstance(item, openai.APIStatusError):
+            status = int(item.status_code)
+            body = f"{item.message} {item.body!r}"
+            verdict = CircuitBreaker.classify(ProviderHTTPError("openai", status, body))
+            if verdict is Verdict.TRIP:
+                return "provider_auth"
+            if status == 429 or status >= 500:
+                return "llm_unavailable"
+            return None
+        if isinstance(item, openai.APIConnectionError):  # includes APITimeoutError
+            return "llm_unavailable"
+    return None
 
 
 def failure_kind(exc: BaseException) -> str:
@@ -53,7 +88,7 @@ def failure_kind(exc: BaseException) -> str:
         return "llm_unavailable"
     if isinstance(exc, BudgetExceeded):
         return "token_budget"
-    return "internal"
+    return _openai_kind(exc) or "internal"
 
 
 class ParsedRequest(BaseModel):

@@ -103,7 +103,9 @@ async def test_jsonl_includes_per_model_fields(tmp_path: Path) -> None:
             done.set()
         return [
             LoadedModel("gemma4:12b", 7_000_000_000, runner="mlx", context_length=4096),
-            LoadedModel("qwen3.5:27b-q4_K_M", 15_000_000_000, runner="llamacpp", context_length=4096),
+            LoadedModel(
+                "qwen3.5:27b-q4_K_M", 15_000_000_000, runner="llamacpp", context_length=4096
+            ),
         ]
 
     out = tmp_path / "resident-models.jsonl"
@@ -165,7 +167,10 @@ def test_warn_unexpected_loaded_models_outside_roster() -> None:
     assert len(lines) == 1
     assert "WARNING" in lines[0]
     assert "gemma4:12b=7000000000" in lines[0]
-    assert warn_unexpected_loaded_models(
-        [LoadedModel("qwen3.5:27b-q4_K_M", 1)], allowed, echo=lines.append
-    ) == []
+    assert (
+        warn_unexpected_loaded_models(
+            [LoadedModel("qwen3.5:27b-q4_K_M", 1)], allowed, echo=lines.append
+        )
+        == []
+    )
     assert len(lines) == 1

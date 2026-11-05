@@ -169,6 +169,15 @@ class StateChangeRequest(BaseModel):
     approval: ApprovalDecision | None = None
 
 
+class ReinstateApplyRequest(BaseModel):
+    """Host CLI applies a Slack ApprovalDecision after registry reinstate-exam (ADR-0048)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reason: str = Field(min_length=1)
+    approval: ApprovalDecision
+
+
 class AvailabilityRequest(BaseModel):
     """Selection gate only (ADR-0042). Does not change TrustState."""
 

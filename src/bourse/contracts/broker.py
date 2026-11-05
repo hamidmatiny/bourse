@@ -81,6 +81,22 @@ class DelegationRecord(BaseModel):
     at: datetime
 
 
+class Delivery(BaseModel):
+    """One A2A message actually sent to an agent (task or canary), in send order.
+
+    Exposure accounting for phase5 (ADR-0042): every delivery counts, canaries included.
+    Attempts that end before the send (quarantine re-check, card fetch/drift, budget register)
+    are not deliveries.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str
+    task_id: str
+    kind: Literal["task", "canary", "exam"]
+    at: datetime
+
+
 class SubtaskStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

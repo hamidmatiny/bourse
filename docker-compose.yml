@@ -132,6 +132,39 @@ services:
         condition: service_completed_successfully
     extra_hosts:
     - host.docker.internal:host-gateway
+  approver:
+    image: bourse:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+    - bourse
+    - approver
+    - serve
+    - --port
+    - '55310'
+    env_file:
+    - path: data/run/env/approver.env
+      required: false
+    networks:
+      bourse_internal:
+        ipv4_address: 172.30.55.22
+      bourse_host: {}
+    ports:
+    - 127.0.0.1:55310:55310
+    healthcheck:
+      test:
+      - CMD
+      - bourse
+      - healthcheck
+      - http://127.0.0.1:55310/healthz
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
   mcp-table:
     image: bourse:local
     build:

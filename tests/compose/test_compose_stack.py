@@ -76,7 +76,10 @@ async def test_egress_probe_events_attributed() -> None:
 
 
 def _purge_vendor_x_agents() -> None:
-    """REVOKED is terminal; wipe vendor-x rows so phase5 can re-register (append-only triggers off)."""
+    """REVOKED is terminal; wipe vendor-x rows so phase5 can re-register.
+
+    Append-only triggers are switched off for the purge.
+    """
     engine = create_async_engine(compose_db_url())
 
     async def _run() -> None:

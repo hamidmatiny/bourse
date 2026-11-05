@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from bourse.contracts.exam import ExamReport
+from bourse.contracts.exam import ExamProgress, ExamReport
 from bourse.contracts.registry import (
     AgentRecord,
     ApiError,
@@ -17,6 +17,7 @@ from bourse.contracts.registry import (
     CardRevision,
     RegisterRequest,
     RegistrationOutcome,
+    ReinstateApplyRequest,
     StateChangeRequest,
     StateTransition,
     Vendor,
@@ -173,6 +174,13 @@ def create_app(
             raise HTTPException(404, "unknown agent")
         return {"started": exams.schedule(agent_id)}
 
+    @app.get("/exams/progress")
+    async def exam_progress() -> list[ExamProgress]:
+        """Running exams (agent, skill, task n/N, attempt, elapsed) and queued ones."""
+        if exams is None:
+            return []
+        return exams.progress()
+
     @app.get("/agents/{agent_id}/exam-result")
     async def exam_result(agent_id: str) -> ExamReport:
         """Last finished admission exam (per-task outcomes + grader detail)."""
@@ -198,6 +206,82 @@ def create_app(
             )
         except UnknownAgent as exc:
             raise HTTPException(404, "unknown agent") from exc
+        except IllegalTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/agents/{agent_id}/reinstate-exam", status_code=202, dependencies=admin)
+    async def start_reinstate_exam(agent_id: str) -> dict[str, bool]:
+        """Schedule a reinstate exam for a QUARANTINED agent (ADR-0048)."""
+        if exams is None:
+            raise HTTPException(503, "admission exams not configured")
+        agent = await repo.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(404, "unknown agent")
+        if agent.state is TrustState.REVOKED:
+            raise HTTPException(409, "REVOKED is never reinstatable")
+        if agent.state is not TrustState.QUARANTINED:
+            raise HTTPException(409, f"state={agent.state.value}; only QUARANTINED may reinstate")
+        return {"started": exams.schedule_reinstate(agent_id)}
+
+    @app.get("/agents/{agent_id}/reinstate-exam-result", dependencies=admin)
+    async def reinstate_exam_result(agent_id: str) -> ExamReport:
+        if exams is None:
+            raise HTTPException(503, "admission exams not configured")
+        if await repo.get_agent(agent_id) is None:
+            raise HTTPException(404, "unknown agent")
+        result = exams.reinstate_results.get(agent_id)
+        if result is None:
+            raise HTTPException(404, "no reinstate exam result yet")
+        return result
+
+    @app.post("/agents/{agent_id}/reinstate", dependencies=admin)
+    async def apply_reinstate(agent_id: str, body: ReinstateApplyRequest) -> StateTransition:
+        """ACTIVE after a passed reinstate exam + approved ApprovalDecision (ADR-0048)."""
+        from bourse.trust.reliability_epoch import bump_rel_epoch
+
+        if exams is None:
+            raise HTTPException(503, "admission exams not configured")
+        agent = await repo.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(404, "unknown agent")
+        if agent.state is TrustState.REVOKED:
+            raise HTTPException(409, "REVOKED is never reinstatable")
+        if agent.state is not TrustState.QUARANTINED:
+            raise HTTPException(409, f"state={agent.state.value}; only QUARANTINED may reinstate")
+        report = exams.reinstate_results.get(agent_id)
+        if report is None:
+            raise HTTPException(409, "reinstate exam not finished")
+        if not report.passed:
+            raise HTTPException(409, f"reinstate exam failed {report.n}/{report.total}")
+        if not body.approval.approved:
+            # Audit stay-quarantined via same-state row.
+            record = StateTransition(
+                agent_id=agent_id,
+                from_state=TrustState.QUARANTINED,
+                to_state=TrustState.QUARANTINED,
+                actor="reinstate",
+                reason=(
+                    f"reinstate denied by {body.approval.by}: {body.approval.reason}; "
+                    f"exam {report.n}/{report.total}; operator reason={body.reason!r}"
+                ),
+                approval=body.approval,
+                at=datetime.now(UTC),
+            )
+            await repo.save_transition(agent.model_copy(update={"updated_at": record.at}), record)
+            return record
+        try:
+            return await transition(
+                repo,
+                agent_id,
+                TrustState.ACTIVE,
+                actor="reinstate",
+                reason=(
+                    f"reinstated by {body.approval.by}; exam {report.n}/{report.total}; "
+                    f"operator reason={body.reason!r}"
+                ),
+                approval=body.approval,
+                agent_updates={"tags": bump_rel_epoch(agent.tags)},
+            )
         except IllegalTransition as exc:
             raise HTTPException(409, str(exc)) from exc
 

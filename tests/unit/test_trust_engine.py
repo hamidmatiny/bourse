@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 from bourse.contracts.trust import Severity, TrustState, Violation
 from bourse.registry.state import IllegalTransition, transition
@@ -227,13 +228,13 @@ async def test_quarantine_recheck_after_completed_continues() -> None:
 
         class Done:
             state = "TASK_STATE_COMPLETED"
-            output = {"findings": []}
+            output: ClassVar[dict[str, list[object]]] = {"findings": []}
             error = ""
             error_kind = None
-            data_parts: list[object] = []
-            text_parts: list[object] = []
-            extra_parts: list[object] = []
-            artifact_metadata: dict[str, object] = {}
+            data_parts: ClassVar[list[object]] = []
+            text_parts: ClassVar[list[object]] = []
+            extra_parts: ClassVar[list[object]] = []
+            artifact_metadata: ClassVar[dict[str, object]] = {}
 
         async def fake_send(*args: object, **kwargs: object) -> Done:
             on_task = kwargs.get("on_task")
@@ -254,8 +255,8 @@ async def test_quarantine_recheck_after_completed_continues() -> None:
 
         import bourse.broker.delegate as delegate_mod
 
-        original = delegate_mod.send_task
-        delegate_mod.send_task = fake_send  # type: ignore[assignment]
+        original = getattr(delegate_mod, "send_task")  # noqa: B009 (module attr, not re-exported)
+        setattr(delegate_mod, "send_task", fake_send)  # noqa: B010 (same)
         try:
             record, _o, _d, _s = await delegator.attempt(
                 "run-q",
@@ -265,7 +266,7 @@ async def test_quarantine_recheck_after_completed_continues() -> None:
                 PiiIn(dataset=DatasetRef.from_csv("a\n1\n")),
             )
         finally:
-            delegate_mod.send_task = original  # type: ignore[assignment]
+            setattr(delegate_mod, "send_task", original)  # noqa: B010 (same)
         assert record.state is DelegationState.CANCELED_QUARANTINE
     finally:
         await bed.aclose()

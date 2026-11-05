@@ -12,7 +12,15 @@ from bourse.broker.reliability import stats_by_agent
 from bourse.contracts.registry import RegisterRequest
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import TrustState
-from bourse.trust.exam import EXAM_FAILED, ExamConfig, ExamRunner, ExamScheduler
+from bourse.trust.exam import (
+    EXAM_FAILED,
+    EXAM_INCONCLUSIVE,
+    INFRA,
+    ExamConfig,
+    ExamRunner,
+    ExamScheduler,
+    is_exam_infra_failure,
+)
 from bourse.trust.honeytokens import InMemoryHoneytokenRepository
 from tests.broker_harness import (
     BrokerBed,
@@ -52,15 +60,49 @@ async def wrong(req: ParsedRequest) -> Outcome:
     return Outcome(output={"findings": []})
 
 
-def runner(bed: BrokerBed, clock: Clock, tokens: InMemoryHoneytokenRepository) -> ExamRunner:
+async def contention_fail(req: ParsedRequest) -> Outcome:
+    return Outcome(
+        kind="fail",
+        error_kind="llm_unavailable",
+        detail="llm_unavailable: AllProvidersFailed",
+    )
+
+
+def runner(
+    bed: BrokerBed,
+    clock: Clock,
+    tokens: InMemoryHoneytokenRepository,
+    config: ExamConfig | None = None,
+) -> ExamRunner:
     return ExamRunner(
         bed.registry_service.repo,
         bed.http,
         tokens,
         SECRET,
-        ExamConfig(k=5, pass_n=4, cooldown_s=600, deadline_s=10),
+        config or ExamConfig(k=5, pass_n=4, cooldown_s=600, deadline_s=10, infra_backoff_s=0.0),
         clock=clock,
     )
+
+
+def test_is_exam_infra_failure_contention_and_llm_unavailable() -> None:
+    assert is_exam_infra_failure(error_kind="llm_unavailable", error="AllProvidersFailed")
+    assert is_exam_infra_failure(detail="contention: no upstream slot")
+    assert is_exam_infra_failure(usage_contention=True)
+    assert is_exam_infra_failure(
+        error_kind="deadline",
+        error="deadline: DeadlineExceeded",
+        task_deadline_s=100.0,
+        queue_wait_ms=60_000.0,
+        contention_queue_fraction=0.5,
+    )
+    assert not is_exam_infra_failure(
+        error_kind="deadline",
+        error="deadline: DeadlineExceeded",
+        task_deadline_s=100.0,
+        queue_wait_ms=1_000.0,
+        contention_queue_fraction=0.5,
+    )
+    assert not is_exam_infra_failure(error_kind="internal", detail="scripted failure")
 
 
 async def test_exam_pass_activates_with_audit_reason(beds: list[BrokerBed]) -> None:
@@ -99,6 +141,80 @@ async def test_exam_fail_stays_pending_and_cooldown(beds: list[BrokerBed]) -> No
     clock.now += timedelta(seconds=601)
     assert await exam.run(agent.agent_id) is not None
     assert len(bed.executors["x-pii"].requests) == 10
+
+
+async def test_exam_infra_contention_retries_then_inconclusive(beds: list[BrokerBed]) -> None:
+    """Contention/llm_unavailable is INFRA: retry then EXAM_INCONCLUSIVE, never EXAM_FAILED."""
+    agent = pii_agent(contention_fail)
+    bed = await BrokerBed([agent], activate=False).setup()
+    beds.append(bed)
+    cfg = ExamConfig(
+        k=1,
+        pass_n=1,
+        cooldown_s=600,
+        deadline_s=10,
+        infra_max_retries=2,
+        infra_backoff_s=0.0,
+    )
+    result = await runner(bed, Clock(), InMemoryHoneytokenRepository(), cfg).run(agent.agent_id)
+    assert result is not None
+    assert not result.passed and result.inconclusive
+    assert all(t.outcome == INFRA for t in result.tasks)
+    assert result.tasks[0].infra_retries == 2
+    # 1 slot x (1 + 2 retries) = 3 attempts
+    assert len(bed.executors["x-pii"].requests) == 3
+    kinds = [v.kind for v in await bed.registry_service.repo.list_violations(agent.agent_id)]
+    assert EXAM_INCONCLUSIVE in kinds
+    assert EXAM_FAILED not in kinds
+    record = await bed.registry_service.repo.get_agent(agent.agent_id)
+    assert record is not None and record.state is TrustState.PENDING
+
+
+async def test_exam_grader_failure_still_exam_failed(beds: list[BrokerBed]) -> None:
+    """Grader failures remain agent-attributable EXAM_FAILED (no INFRA path)."""
+    agent = pii_agent(wrong)
+    bed = await BrokerBed([agent], activate=False).setup()
+    beds.append(bed)
+    cfg = ExamConfig(k=2, pass_n=2, cooldown_s=600, deadline_s=10, infra_backoff_s=0.0)
+    result = await runner(bed, Clock(), InMemoryHoneytokenRepository(), cfg).run(agent.agent_id)
+    assert result is not None and not result.passed and not result.inconclusive
+    assert all(t.outcome == "grader-failed" for t in result.tasks)
+    assert len(bed.executors["x-pii"].requests) == 2  # no INFRA retries
+    kinds = [v.kind for v in await bed.registry_service.repo.list_violations(agent.agent_id)]
+    assert kinds == [EXAM_FAILED]
+
+
+async def test_exam_scheduler_never_exceeds_concurrency(beds: list[BrokerBed]) -> None:
+    import anyio
+
+    async def slow(req: ParsedRequest) -> Outcome:
+        await anyio.sleep(0.2)
+        return await honest(req)
+
+    agents = [
+        FakeAgent(
+            f"pii-{i}",
+            make_party(f"vendor-{i}.local"),
+            (SkillId.PII_DETECT,),
+            slow,
+        )
+        for i in range(4)
+    ]
+    bed = await BrokerBed(agents, activate=False).setup()
+    beds.append(bed)
+    cfg = ExamConfig(k=1, pass_n=1, cooldown_s=600, deadline_s=30, infra_backoff_s=0.0)
+    exam = runner(bed, Clock(), InMemoryHoneytokenRepository(), cfg)
+    lines: list[str] = []
+    scheduler = ExamScheduler(exam, max_concurrent=2, reschedule_delay_s=3600.0, echo=lines.append)
+    for a in agents:
+        assert scheduler.schedule(a.agent_id)
+    await scheduler.wait()
+    assert scheduler.peak_concurrent <= 2
+    assert scheduler.peak_concurrent == 2
+    assert any("exam queue:" in ln and "limit=2" in ln for ln in lines)
+    for a in agents:
+        rec = await bed.registry_service.repo.get_agent(a.agent_id)
+        assert rec is not None and rec.state is TrustState.ACTIVE
 
 
 async def test_exam_needs_4_of_5_per_skill(beds: list[BrokerBed]) -> None:
@@ -185,11 +301,7 @@ async def test_two_consecutive_canary_failures_record_violation(beds: list[Broke
     pii = next(a for a in bed.agents if a.name == "a-pii")
     kinds = [v.kind for v in await repo.list_violations(pii.agent_id)]
     assert kinds.count(CANARY_FAIL) == 1, (pii.agent_id, kinds)
-    pii_canaries = [
-        r
-        for r in bed.ledger.rows
-        if r.kind == "canary" and r.agent_id == pii.agent_id
-    ]
+    pii_canaries = [r for r in bed.ledger.rows if r.kind == "canary" and r.agent_id == pii.agent_id]
     assert len(pii_canaries) >= 2
     assert all(r.state.value == "COMPLETED" for r in pii_canaries)
     assert all(r.spot_check_passed is False for r in pii_canaries)
@@ -278,3 +390,22 @@ async def test_canary_counter_persistent_across_runs_m10() -> None:
                 )
             )
     assert n_canaries == 2
+
+
+async def test_delegator_logs_task_and_canary_deliveries_in_send_order(
+    beds: list[BrokerBed],
+) -> None:
+    """Delivery log (phase5 exposure, ADR-0042): every A2A send, canaries included."""
+    agents = one_agent_per_skill()
+    bed = await BrokerBed(agents, canary_every=2).setup()
+    beds.append(bed)
+    broker = bed.broker()
+    for _ in range(4):
+        await broker.start(intake())
+    log = broker.delegator.deliveries
+    ids = {a.name: a.agent_id for a in agents}
+    for name, executor in bed.executors.items():
+        sent = [d for d in log if d.agent_id == ids[name]]
+        assert [d.task_id for d in sent] == [r.task_id for r in executor.requests], name
+        assert sum(d.kind == "canary" for d in sent) == 2, name
+        assert sum(d.kind == "task" for d in sent) == 4, name

@@ -13,22 +13,18 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
+
 # Allow `uv run python scripts/measure_candidate_d.py` (no scripts package install).
+# The imports below must follow this sys.path insert, hence the per-line E402 waivers.
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import httpx
-
-from bourse.agents.catalog import ROSTER_LARGE_MODEL
-from bourse.config import get_settings
-from bourse.contracts.exam import ExamReport
-from bourse.runtime.resident import RESIDENT_LIMIT_BYTES, format_bytes_units
-from bourse.stack.activation import print_exam_summary_table, registry_agent_rows
-from scripts.measure_resident_candidates import (
+from scripts.measure_resident_candidates import (  # noqa: E402 (after sys.path insert)
     ALL_AGENT_KEYS,
     OUT,
     MeasureFailed,
@@ -37,15 +33,21 @@ from scripts.measure_resident_candidates import (
     _ensure_registry,
     _fetch_report,
     patch_all_env_parallel,
+    reregister,
     restore_roster_env,
     run_baselines,
     run_exams_with_peak,
-    reregister,
     set_all_agents_model,
     set_meter_parallel,
     unload_model,
     verify_ps_models,
 )
+
+from bourse.agents.catalog import ROSTER_LARGE_MODEL  # noqa: E402 (after sys.path insert)
+from bourse.config import get_settings  # noqa: E402 (after sys.path insert)
+from bourse.contracts.exam import ExamReport  # noqa: E402 (after sys.path insert)
+from bourse.runtime.resident import RESIDENT_LIMIT_BYTES, format_bytes_units  # noqa: E402 (after sys.path insert)
+from bourse.stack.activation import print_exam_summary_table, registry_agent_rows  # noqa: E402 (after sys.path insert)
 
 QWEN27 = ROSTER_LARGE_MODEL  # qwen3.5:27b-q4_K_M
 CARD_VERSION = "1.0.1"  # semver bump required; prerelease tags count as VERSION_ROLLBACK
@@ -204,7 +206,7 @@ def _exam_failures(reports: dict[str, ExamReport | None]) -> list[dict]:
 
 def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     try:
         _ensure_registry()
         print("=== restore default meter gate parallel=2 (host operator-restarted) ===", flush=True)
@@ -271,7 +273,8 @@ def main() -> int:
         print("\n=== tokens in/out per agent (since measure start) ===", flush=True)
         for aid, t in sorted(tokens.items()):
             print(
-                f"  {aid} tokens_in={t['tokens_in']} tokens_out={t['tokens_out']} n_calls={t['n_calls']}",
+                f"  {aid} tokens_in={t['tokens_in']} tokens_out={t['tokens_out']} "
+                f"n_calls={t['n_calls']}",
                 flush=True,
             )
         # highlight pii-fast vs pii-precise
@@ -330,7 +333,11 @@ def main() -> int:
 
         # merge into candidates json
         prev = json.loads(OUT.read_text()) if OUT.exists() else {"candidates": []}
-        cands = [c for c in prev.get("candidates", []) if not str(c.get("candidate_id", "")).startswith("d-")]
+        cands = [
+            c
+            for c in prev.get("candidates", [])
+            if not str(c.get("candidate_id", "")).startswith("d-")
+        ]
         cands.append({k: v for k, v in payload.items() if k != "exam_failures"})
         # keep failures in d file; slim entry in candidates
         slim = {k: v for k, v in payload.items() if k not in {"exam_failures"}}
@@ -351,13 +358,13 @@ def main() -> int:
         return 0
     except MeasureFailed:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise MeasureFailed(f"{type(exc).__name__}: {exc}") from None
     finally:
         try:
             restore_roster_env(parallel=2)
             patch_all_env_parallel(2)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"restore warning: {exc}", file=sys.stderr, flush=True)
 
 

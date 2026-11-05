@@ -14,8 +14,8 @@ from bourse.contracts.broker import CandidateScore, SelectionDecision, UtilityTe
 from bourse.contracts.registry import AgentRecord
 from bourse.contracts.skills import SkillId
 from bourse.contracts.tasks import Subtask
-from bourse.ledger.recorder import agent_major
 from bourse.ledger.repo import LedgerRepository
+from bourse.trust.reliability_epoch import effective_agent_major
 
 
 class SelectionPolicy(Protocol):
@@ -112,7 +112,7 @@ class MeasuredPolicy:
         self._decisions: dict[SkillId, int] = {}
 
     async def refresh(self, skill: SkillId, candidates: Sequence[AgentRecord]) -> None:
-        majors = {a.agent_id: agent_major(a.current_version) for a in candidates}
+        majors = {a.agent_id: effective_agent_major(a.current_version, a.tags) for a in candidates}
         rows = await self.ledger.list_rows(skill=skill)
         self._stats[skill] = stats_by_agent(rows, skill, majors, self.config.ewma_alpha)
         self._decisions[skill] = len(await self.ledger.list_selections(skill=skill))

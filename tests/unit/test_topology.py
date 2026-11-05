@@ -68,12 +68,42 @@ def test_egress_dns_command_is_valid_shell() -> None:
     assert "dns_health_ok" in health[3]
 
 
-def test_only_meter_registry_and_tools_reach_the_host_network() -> None:
+def test_only_meter_registry_approver_and_tools_reach_the_host_network() -> None:
+    """bourse_host is closed (ADR-0048): no agent / adversary / MCP."""
     services = compose()["services"]
     on_host = sorted(n for n, s in services.items() if topology.HOST_NET in s.get("networks", {}))
-    assert on_host == ["jaeger", "meter", "otel-collector", "postgres", "registry"]
+    assert on_host == sorted(topology.HOST_NET_SERVICES)
+    assert set(on_host) == topology.HOST_NET_SERVICES
     assert services["meter"]["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert "ports" not in services["meter"]
+    assert services["approver"]["ports"] == ["127.0.0.1:55310:55310"]
+    # Approver uses Docker default DNS on bourse_host — not egress-dns (ADR-0048).
+    assert "dns" not in services["approver"]
+    assert "egress-dns" not in services["approver"].get("depends_on", {})
+    assert services["approver"]["healthcheck"]["test"] == [
+        "CMD",
+        "bourse",
+        "healthcheck",
+        "http://127.0.0.1:55310/healthz",
+    ]
+    agent_names = {n.name for n in topology.agent_nodes()}
+    adversary_names = {n.name for n in topology.adversary_nodes()}
+    mcp_names = {n.name for n in topology.nodes() if n.name.startswith("mcp-")}
+    forbidden = agent_names | adversary_names | mcp_names
+    assert not (forbidden & set(on_host)), f"untrusted on bourse_host: {forbidden & set(on_host)}"
+    for name in forbidden:
+        nets = set(services[name].get("networks", {}))
+        assert topology.HOST_NET not in nets
+        assert nets == {topology.INTERNAL} or topology.INTERNAL in nets
+
+
+def test_dnsmasq_has_no_slack_public_forwarders() -> None:
+    """Slack must not be allowlisted via egress-dns; that path cannot resolve on internal:true."""
+    conf = topology.dnsmasq_conf()
+    assert "server=/slack.com/8.8.8.8" not in conf
+    assert "wss-primary.slack.com" not in conf
+    assert "8.8.8.8" not in conf
+    assert f"address=/#/{topology.SINKHOLE_IP}" in conf
 
 
 def test_vendor_hostnames() -> None:
@@ -122,7 +152,7 @@ def test_compose_down_includes_every_profile_from_file() -> None:
     for svc in topology.compose_document()["services"].values():
         declared.update(svc.get("profiles") or [])
     assert declared and set(compose_profiles()) == declared
-    args = compose_profile_args() + ["down", "-v", "--remove-orphans"]
+    args = [*compose_profile_args(), "down", "-v", "--remove-orphans"]
     assert args[-3:] == ["down", "-v", "--remove-orphans"]
     flagged = {args[i + 1] for i, a in enumerate(args[:-3]) if a == "--profile"}
     assert flagged == declared

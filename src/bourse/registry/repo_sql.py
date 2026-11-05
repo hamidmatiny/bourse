@@ -42,6 +42,7 @@ from bourse.contracts.registry import (
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import Severity, TrustState, Violation
 from bourse.registry.repo import RevisionExists, VendorExists
+from bourse.trust.reliability_epoch import reliability_epoch
 
 metadata = MetaData()
 
@@ -102,6 +103,7 @@ violations = Table(
     Column("severity", Text, nullable=False),
     Column("evidence", Text, nullable=False),
     Column("at", TS, nullable=False),
+    Column("rel_epoch", Integer, nullable=False, server_default="0"),
 )
 
 violation_aggregates = Table(
@@ -231,7 +233,12 @@ class SqlRepository:
             await conn.execute(
                 agents.update()
                 .where(agents.c.agent_id == agent.agent_id)
-                .values(state=agent.state.value, updated_at=agent.updated_at)
+                .values(
+                    state=agent.state.value,
+                    updated_at=agent.updated_at,
+                    # Persist tag updates (e.g. rel_epoch:N on reinstate, ADR-0048).
+                    tags=list(agent.tags),
+                )
             )
             await conn.execute(
                 state_transitions.insert().values(
@@ -248,6 +255,10 @@ class SqlRepository:
             )
 
     async def add_violation(self, violation: Violation) -> None:
+        epoch = violation.rel_epoch
+        if epoch is None:
+            agent = await self.get_agent(violation.agent_id)
+            epoch = reliability_epoch(agent.tags) if agent is not None else 0
         async with self._engine.begin() as conn:
             await conn.execute(
                 violations.insert().values(
@@ -256,14 +267,15 @@ class SqlRepository:
                     severity=violation.severity.value,
                     evidence=violation.evidence,
                     at=violation.at,
+                    rel_epoch=epoch,
                 )
             )
 
     async def bump_aggregate(self, vendor_domain: str, hour: datetime, kind: str) -> int:
-        stmt = insert(violation_aggregates).values(
+        base = insert(violation_aggregates).values(
             vendor_domain=vendor_domain, hour=hour, kind=kind, count=1
         )
-        stmt = stmt.on_conflict_do_update(
+        stmt = base.on_conflict_do_update(
             index_elements=["vendor_domain", "hour", "kind"],
             set_={"count": violation_aggregates.c.count + 1},
         ).returning(violation_aggregates.c.count)
@@ -290,6 +302,7 @@ class SqlRepository:
                 agent_id=r.agent_id,
                 evidence=r.evidence,
                 at=r.at,
+                rel_epoch=r.rel_epoch,
             )
             for r in rows
         ]

@@ -1,20 +1,22 @@
 """Honest-agent activation wait and diagnostics (admission exams).
 
-Wait until every registered agent is ACTIVE or has finished with EXAM_FAILED
-(bounded by exam_timeout_s + 120). Do not stop at the first EXAM_FAILED. On exit,
-print one table: agent, model, per-skill n/N, per-task outcomes.
+Wait until every registered agent is ACTIVE or has finished with EXAM_FAILED (budget computed
+from the number of exam tasks, see exam_wait_budget_s). EXAM_INCONCLUSIVE keeps the agent
+PENDING and does not end the wait (reschedule). On exit, print per-skill n/N plus
+passed/grader-failed/infra-retried/inconclusive counts (ADR-0049).
 """
 
 from __future__ import annotations
 
 import subprocess
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
 from bourse.config import Settings, get_settings
-from bourse.contracts.exam import ExamReport
+from bourse.contracts.exam import ExamProgress, ExamReport
 from bourse.contracts.registry import AgentRecord, StateTransition
 from bourse.stack.topology import COMPOSE_DB
 
@@ -27,10 +29,58 @@ LARGE_AGENT_SERVICES = ("agent-reporter", "agent-pii-precise")
 LARGE_AGENT_ID_SUBSTR = ("reporter", "pii-precise")
 
 
-def exam_wait_s(settings: Settings | None = None) -> float:
-    """Wall budget for waiting on exams: whole-exam timeout + buffer."""
+def exam_wait_budget_s(
+    task_counts: Sequence[int],
+    *,
+    task_deadline_s: float,
+    exam_timeout_s: float,
+    infra_retries: int,
+    concurrency: int,
+    buffer_s: float = EXAM_WAIT_BUFFER_S,
+) -> float:
+    """Worst-case wall to finish every exam, from the number of tasks per exam.
+
+    One exam is bounded by min(tasks * (1 + retries) * (deadline + grace), hard cap) where
+    hard cap = exam_timeout_s + deadline + 60 (ExamScheduler backstop). The scheduler runs
+    `concurrency` exams at once, so the makespan is at most sum/concurrency + max
+    (list-scheduling bound), plus a buffer for the registry to record the outcome.
+    """
+    from bourse.trust.exam import ExamConfig
+
+    if not task_counts:
+        return buffer_s
+    cfg = ExamConfig()
+    hard_cap = exam_timeout_s + task_deadline_s + cfg.hard_cap_slack_s
+    per_attempt = task_deadline_s + cfg.slot_grace_s
+    per_exam = [min(n * (1 + infra_retries) * per_attempt, hard_cap) for n in task_counts]
+    return sum(per_exam) / max(1, concurrency) + max(per_exam) + buffer_s
+
+
+def max_exam_task_deadline_s(settings: Settings) -> float:
+    by_model = dict(settings.exam_deadline_by_model)
+    return max([float(settings.bourse_exam_deadline_s), *by_model.values()])
+
+
+def exam_wait_s(
+    settings: Settings | None = None, task_counts: Sequence[int] | None = None
+) -> float:
+    """Wall budget for waiting on exams, computed from task counts (default: honest roster)."""
+    from bourse.trust.exam import ExamConfig
+
     s = settings or get_settings()
-    return float(s.bourse_exam_timeout_s) + EXAM_WAIT_BUFFER_S
+    if task_counts is None:
+        from bourse.agents.catalog import specs_from_settings
+
+        task_counts = [
+            s.bourse_exam_k * len(spec.skills) for spec in specs_from_settings(s).values()
+        ]
+    return exam_wait_budget_s(
+        task_counts,
+        task_deadline_s=max_exam_task_deadline_s(s),
+        exam_timeout_s=float(s.bourse_exam_timeout_s),
+        infra_retries=ExamConfig().infra_max_retries,
+        concurrency=s.ollama_num_parallel,
+    )
 
 
 def registry_agent_rows(client: httpx.Client, base: str) -> list[tuple[str, str, str]]:
@@ -68,13 +118,25 @@ def _fetch_exam_report(client: httpx.Client, base: str, agent_id: str) -> ExamRe
     return ExamReport.model_validate(resp.json())
 
 
+def _exam_count_line(report: ExamReport) -> str:
+    """passed / grader-failed / infra-retried / inconclusive (ADR-0049)."""
+    passed = sum(1 for t in report.tasks if t.outcome == "passed")
+    grader_failed = sum(1 for t in report.tasks if t.outcome == "grader-failed")
+    infra_retried = sum(t.infra_retries for t in report.tasks)
+    inconclusive = sum(1 for t in report.tasks if t.outcome in ("INFRA", "EXAM_TIMEOUT"))
+    return (
+        f"passed={passed} grader-failed={grader_failed} "
+        f"infra-retried={infra_retried} inconclusive={inconclusive}"
+    )
+
+
 def print_exam_summary_table(
     client: httpx.Client,
     base: str,
     rows: list[tuple[str, str, str]],
     echo: Any = print,
 ) -> None:
-    """One table: agent, model, per-skill n/N, per-task outcomes (+ grader detail on fail)."""
+    """One table: agent, model, per-skill n/N, counts, per-task outcomes."""
     from bourse.agents.catalog import ROSTER_MODELS, specs_from_settings
     from bourse.registry.service import make_agent_id
     from bourse.stack.launcher import table
@@ -84,18 +146,22 @@ def print_exam_summary_table(
         make_agent_id(spec.display_name, spec.vendor_domain): ROSTER_MODELS[name]
         for name, spec in specs_from_settings(settings).items()
     }
-    header = ["agent", "model", "state", "per-skill", "tasks"]
+    header = ["agent", "model", "state", "per-skill", "counts", "tasks"]
     out_rows: list[list[str]] = [header]
     echo("--- exam summary ---")
     for aid, st, last in rows:
         report = _fetch_exam_report(client, base, aid)
-        model = (report.model if report and report.model else id_to_model.get(aid, "?"))
+        model = report.model if report and report.model else id_to_model.get(aid, "?")
         if report is None:
             skills = last if last != "-" else "(no exam result yet)"
+            counts = "-"
             tasks = "-"
         else:
             k = settings.bourse_exam_k
             skills = ", ".join(f"{s} {p}/{k}" for s, p in sorted(report.per_skill.items()))
+            counts = _exam_count_line(report)
+            if report.inconclusive:
+                echo(f"  INCONCLUSIVE {aid}: {counts}")
             parts: list[str] = []
             for t in report.tasks:
                 if t.outcome == "passed":
@@ -103,12 +169,14 @@ def print_exam_summary_table(
                 elif t.outcome == "grader-failed":
                     parts.append(f"{t.skill}:grader-failed[{t.detail}]")
                     echo(f"  FAIL {aid} {t.task_id} {t.skill}: {t.detail}")
+                elif t.outcome in ("INFRA", "EXAM_TIMEOUT"):
+                    parts.append(f"{t.skill}:{t.outcome}[{t.detail}]")
+                    echo(f"  INFRA {aid} {t.task_id} {t.skill}: {t.detail}")
                 else:
                     parts.append(f"{t.skill}:{t.outcome}[{t.detail}]")
-                    if t.outcome != "passed":
-                        echo(f"  FAIL {aid} {t.task_id} {t.skill}: {t.outcome} {t.detail}")
+                    echo(f"  FAIL {aid} {t.task_id} {t.skill}: {t.outcome} {t.detail}")
             tasks = "; ".join(parts) if parts else "-"
-        out_rows.append([aid, model, st, skills, tasks])
+        out_rows.append([aid, model, st, skills, counts, tasks])
     echo(table(out_rows))
 
 
@@ -148,23 +216,34 @@ def wait_agents_active(
     from bourse.stack.launcher import table
 
     settings = settings or get_settings()
-    timeout = exam_wait_s(settings) if timeout_s is None else float(timeout_s)
     base = settings.bourse_registry_url.rstrip("/")
+    if timeout_s is None:
+        counts = _pending_task_counts(base, settings.bourse_exam_k)
+        timeout = exam_wait_s(settings, counts if counts else None)
+        echo(
+            f"wait-active budget {timeout:.0f}s from {sum(counts)} exam tasks in "
+            f"{len(counts)} pending exams (concurrency {settings.ollama_num_parallel}, "
+            f"task deadline {max_exam_task_deadline_s(settings):.0f}s)"
+        )
+    else:
+        timeout = float(timeout_s)
     started = time.monotonic()
+    progress_seen: dict[str, tuple[str, int, int]] = {}
     last_key: tuple[tuple[str, str], ...] | None = None
     last_beat = time.monotonic()
     exam_peak = 0
     roster_warned = False
     while True:
-        sampled = _sample_ollama_resident(
-            settings, echo=echo, warn_roster=not roster_warned
-        )
+        sampled = _sample_ollama_resident(settings, echo=echo, warn_roster=not roster_warned)
         if sampled is not None:
             exam_peak = max(exam_peak, sampled)
             roster_warned = True  # one warning pass per wait (repeat only if never sampled)
         try:
             with httpx.Client(timeout=10.0) as client:
                 rows = registry_agent_rows(client, base)
+                if not rows:
+                    echo("no agents registered; run stack register")
+                    return 1
                 pending = [aid for aid, st, _ in rows if st == "PENDING"]
                 failed = exam_failed_pending(client, base, pending)
                 failed_ids = {aid for aid, _ in failed}
@@ -174,7 +253,10 @@ def wait_agents_active(
                 elapsed = time.monotonic() - started
                 now = time.monotonic()
                 if key != last_key:
-                    echo(f"[{elapsed:5.0f}s] ACTIVE {active}/{len(rows)} pending_exams={len(still_running)}")
+                    echo(
+                        f"[{elapsed:5.0f}s] ACTIVE {active}/{len(rows)} "
+                        f"pending_exams={len(still_running)}"
+                    )
                     for r in rows:
                         echo(f"  {r[0]} {r[1]}")
                     last_key = key
@@ -184,7 +266,13 @@ def wait_agents_active(
                         f"[{elapsed:5.0f}s] heartbeat ACTIVE {active}/{len(rows)} "
                         f"pending_exams={len(still_running)} exam_failed={len(failed_ids)}"
                     )
+                    for line in exam_progress_lines(_exam_progress(client, base)):
+                        echo(line)
                     last_beat = now
+                for line in _new_progress_lines(
+                    _exam_progress(client, base), progress_seen, elapsed
+                ):
+                    echo(line)
                 # All exams finished: every agent ACTIVE or PENDING+EXAM_FAILED.
                 if rows and not still_running:
                     echo(table([["agent", "state", "last transition"], *[list(r) for r in rows]]))
@@ -206,6 +294,61 @@ def wait_agents_active(
             echo(f"registry unreachable: {type(exc).__name__}")
             return 1
         time.sleep(POLL_S)
+
+
+def _pending_task_counts(base: str, k: int) -> list[int]:
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            agents = [AgentRecord.model_validate(a) for a in client.get(f"{base}/agents").json()]
+    except httpx.HTTPError:
+        return []
+    return [k * len(a.skills) for a in agents if a.state.value == "PENDING"]
+
+
+def _exam_progress(client: httpx.Client, base: str) -> list[ExamProgress]:
+    try:
+        resp = client.get(f"{base}/exams/progress")
+    except httpx.HTTPError:
+        return []
+    if resp.status_code != 200:
+        return []
+    return [ExamProgress.model_validate(p) for p in resp.json()]
+
+
+def exam_progress_lines(progress: Sequence[ExamProgress]) -> list[str]:
+    """One line per running exam (agent, skill, task n/N, attempt, elapsed) + queued list."""
+    lines = [
+        f"  exam {p.agent_id} {p.skill} task {p.task_n}/{p.task_total} "
+        f"attempt {p.attempt} task_elapsed {p.task_elapsed_s:.0f}s/{p.task_deadline_s:.0f}s "
+        f"exam_elapsed {p.exam_elapsed_s:.0f}s ({p.mode})"
+        for p in progress
+        if p.status == "running"
+    ]
+    queued = [p.agent_id for p in progress if p.status == "queued"]
+    if queued:
+        lines.append(f"  exam queued: {', '.join(queued)}")
+    return lines
+
+
+def _new_progress_lines(
+    progress: Sequence[ExamProgress],
+    seen: dict[str, tuple[str, int, int]],
+    elapsed: float,
+) -> list[str]:
+    """Lines for exams whose (skill, task_n, attempt) changed since the last poll."""
+    out: list[str] = []
+    for p in progress:
+        if p.status != "running":
+            continue
+        key = (p.skill, p.task_n, p.attempt)
+        if seen.get(p.agent_id) == key:
+            continue
+        seen[p.agent_id] = key
+        out.append(
+            f"[{elapsed:5.0f}s] exam {p.agent_id} {p.skill} task {p.task_n}/{p.task_total} "
+            f"attempt {p.attempt} (exam_elapsed {p.exam_elapsed_s:.0f}s)"
+        )
+    return out
 
 
 def _compose_logs(*args: str) -> str:
@@ -231,7 +374,7 @@ def dump_activation_diagnostics(echo: Any = print) -> None:
                 echo(f"  {aid} {st} {last}")
             print_exam_summary_table(client, base, rows, echo=echo)
             echo("--- violations ---")
-            for aid, st, _ in rows:
+            for aid, _st, _ in rows:
                 vios = client.get(f"{base}/agents/{aid}/violations").json()
                 if not vios:
                     continue

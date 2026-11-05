@@ -1,12 +1,21 @@
+from typing import Any, cast
+
 import httpx
 import pytest
 
 from bourse.adversaries.behaviors import EXAM_TASKS, HONEST_REAL, AdversaryExecutor
-from bourse.adversaries.catalog import ADVERSARIES, ATTACK_CARD_HOSTS, BY_ID, VENDOR, adversary_specs
+from bourse.adversaries.catalog import (
+    ADVERSARIES,
+    ATTACK_CARD_HOSTS,
+    BY_ID,
+    VENDOR,
+    adversary_specs,
+)
 from bourse.adversaries.runner import (
     EXPECTED,
     Phase5Report,
     ScenarioReport,
+    _revoke_vendor_x,
     classify,
     format_phase5,
     red,
@@ -168,6 +177,86 @@ def test_preflight_network_raises_on_dns_failure(monkeypatch: pytest.MonkeyPatch
         _preflight_network()
 
 
+@pytest.mark.asyncio
+async def test_revoke_vendor_x_skips_keep_agent() -> None:
+    """--reuse-agent: scenario isolation must not revoke the reused identity."""
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 11, 5, tzinfo=UTC)
+    keep_id = "sleeper-loud@vendor-x.local"
+    other_id = "sleeper-quiet@vendor-x.local"
+    revoked: list[str] = []
+
+    class _Resp:
+        def __init__(self, code: int, body: object = None) -> None:
+            self.status_code = code
+            self._body = body if body is not None else {}
+
+        def json(self) -> object:
+            return self._body
+
+    class _Client:
+        async def get(self, url: str, params: dict[str, Any] | None = None) -> _Resp:
+            state = (params or {}).get("state", "ACTIVE")
+            if state != "ACTIVE":
+                return _Resp(200, [])
+            return _Resp(
+                200,
+                [
+                    {
+                        "agent_id": keep_id,
+                        "vendor_domain": VENDOR,
+                        "name": "Sleeper Loud",
+                        "card_url": None,
+                        "state": "ACTIVE",
+                        "current_version": "1.0.0",
+                        "current_digest": "0" * 64,
+                        "skills": ["pii.detect"],
+                        "tags": ["rel_epoch:1"],
+                        "created_at": now.isoformat(),
+                        "updated_at": now.isoformat(),
+                    },
+                    {
+                        "agent_id": other_id,
+                        "vendor_domain": VENDOR,
+                        "name": "Sleeper Quiet",
+                        "card_url": None,
+                        "state": "ACTIVE",
+                        "current_version": "1.0.0",
+                        "current_digest": "0" * 64,
+                        "skills": ["pii.detect"],
+                        "tags": [],
+                        "created_at": now.isoformat(),
+                        "updated_at": now.isoformat(),
+                    },
+                ],
+            )
+
+        async def post(
+            self,
+            url: str,
+            json: dict[str, Any] | None = None,
+            headers: dict[str, str] | None = None,
+        ) -> _Resp:
+            # .../agents/{id}/state
+            aid = url.rstrip("/").split("/")[-2]
+            revoked.append(aid)
+            assert json == {"to_state": "REVOKED", "reason": "phase5 scenario isolation"}
+            return _Resp(200, {"ok": True})
+
+    client = cast(httpx.AsyncClient, _Client())  # duck-typed get/post stand-in
+    await _revoke_vendor_x(client, "http://registry", {"Authorization": "Bearer x"}, keep=keep_id)
+    assert keep_id not in revoked
+    assert other_id in revoked
+    # AgentRecord validate path used above — ensure keep frozenset form works too.
+    revoked.clear()
+    await _revoke_vendor_x(
+        client, "http://registry", {"Authorization": "Bearer x"}, keep=frozenset({keep_id})
+    )
+    assert keep_id not in revoked
+    assert other_id in revoked
+
+
 def test_fetch_failed_is_error_not_caught() -> None:
     assert classify("A4a", "FETCH_FAILED") == "error"
     assert classify("A1", "FORGED_SIGNATURE", misbehaved=True) == "caught"
@@ -180,6 +269,9 @@ def test_fetch_failed_is_error_not_caught() -> None:
     assert classify("A5a", "none", misbehaved=False) == "not-exposed"
     assert classify("A5a", "none", misbehaved=True) == "missed"
     assert classify("A8c", "CANARY_FAIL", misbehaved=True) == "missed"
+    assert classify("A5a", "AGENT_REVOKED", misbehaved=True) == "error (precondition)"
+    assert classify("A5a", "NOT_ACTIVE", misbehaved=False) == "error (precondition)"
+    assert classify("A5a", "REVOKED", registration_rejected=True) == "error (precondition)"
     report = _empty_report(
         ScenarioReport(
             id="A4a",

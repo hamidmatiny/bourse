@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     slack_bot_token: SecretStr = SecretStr("")
     slack_app_token: SecretStr = SecretStr("")
     slack_channel_id: str = ""
+    # Comma-separated Slack user IDs allowed to Approve/Deny (ADR-0048).
+    bourse_slack_approvers: str = ""
+    # Default approval wait (seconds); timeout -> deny reason "timeout".
+    bourse_slack_timeout_s: float = 900.0
+    # Compose approver service (ADR-0048). Internal callers use URL+key; no Slack tokens.
+    bourse_approver_url: str = ""
+    bourse_approver_key: SecretStr = SecretStr("")
+    # Set to 1 inside compose containers (host CLI uses this for refuse-if-compose).
+    bourse_in_compose: str = ""
     # ADR-0047: both knobs equal the single roster model (aliases for compose/env).
     bourse_model_large: str = "qwen3.5:27b-q4_K_M"
     bourse_model_small: str = "qwen3.5:27b-q4_K_M"
@@ -179,6 +188,20 @@ class Settings(BaseSettings):
     @property
     def dev_hosts(self) -> frozenset[str]:
         return frozenset(h.strip().lower() for h in self.bourse_dev_hosts.split(",") if h.strip())
+
+    @property
+    def slack_approver_ids(self) -> frozenset[str]:
+        return frozenset(x.strip() for x in self.bourse_slack_approvers.split(",") if x.strip())
+
+    @property
+    def slack_env_complete(self) -> bool:
+        """True when SlackApprover can run (ADR-0048)."""
+        return bool(
+            self.slack_bot_token.get_secret_value()
+            and self.slack_app_token.get_secret_value()
+            and self.slack_channel_id.strip()
+            and self.slack_approver_ids
+        )
 
 
 @lru_cache(maxsize=1)
