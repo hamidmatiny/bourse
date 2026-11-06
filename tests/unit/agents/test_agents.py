@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import json
 import socket
 import time
@@ -12,7 +14,7 @@ import pytest
 
 from bourse.contracts.registry import VerifyResult
 from bourse.contracts.skills import SkillId
-from bourse.contracts.skills_io import SKILL_IO
+from bourse.contracts.skills_io import SKILL_IO, DatasetRef
 from bourse.crypto.card_sign import verify_card
 from bourse.crypto.jcs import card_from_dict
 from bourse.grading.graders import grade
@@ -155,12 +157,61 @@ async def test_profiler_numbers_come_from_tools_not_llm() -> None:
 
 async def test_crewai_agent_sends_task_id_and_stays_local() -> None:
     script = CrewScript()
-    h = AgentHarness("pii_precise", None, crew=script)
+    h = AgentHarness("pii_precise", _precise_meter({}), crew=script)
     result = await h.send(SkillId.PII_DETECT.value, dataset_payload("people"), task_id="task-77")
     assert result.state == "TASK_STATE_COMPLETED", result.error
     assert script.headers and set(script.headers) == {"task-77"}
     assert set(script.hosts) == {"meter.test"}
-    assert h.meter_requests == []  # CrewAI goes through its own client, still to the meter URL
+    # submit ends the crew (result_as_answer): one LLM call, no "Final Answer" turn.
+    assert len(script.headers) == 1, script.headers
+    # 1.1.0 (ADR-0052): the column-kind call goes through the agent's router, same meter/task.
+    assert {r.headers["X-Bourse-Task-Id"] for r in h.meter_requests} == {"task-77"}
+    assert {r.url.host for r in h.meter_requests} == {"meter.test"}
+
+
+def _precise_meter(
+    kinds: dict[str, str], hits: list[dict[str, Any]] | None = None
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Fake meter for pii-precise's submit-tool steps: answers by the requested schema."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        props = body["tools"][0]["function"]["parameters"]["properties"]
+        if "columns" in props:
+            return submit_call({"columns": [{"column": c, "kind": k} for c, k in kinds.items()]})
+        return submit_call({"hits": hits or []})
+
+    return handler
+
+
+async def test_pii_precise_adds_only_contact_check_accepted_findings() -> None:
+    """ADR-0052: LLM-proposed findings are a union on top of the deterministic ones, and the
+    deterministic contact_check rejects what is not a contact (here: `color` as PHONE)."""
+    from bourse.bench.generator import generate
+
+    case = generate("dev", "dev-agent-hard", "hard_pii", "bench-dev:agent-test:21")
+    header = case.csv_text.splitlines()[0].split(",")
+    kinds = {"reach": "EMAIL", "tel": "PHONE", "notes": "FREE_TEXT", "color": "PHONE"}
+    kinds = {c: k for c, k in kinds.items() if c in header}
+    rows = list(csv.reader(io.StringIO(case.csv_text)))[1:]
+    notes_hits = []
+    if "notes" in header:
+        i = header.index("notes")
+        notes_hits = [
+            {"row": r, "kind": "PHONE"} for r, row in enumerate(rows) if "call " in row[i]
+        ] + [{"row": r, "kind": "EMAIL"} for r, row in enumerate(rows) if "call " not in row[i]]
+    h = AgentHarness("pii_precise", _precise_meter(kinds, notes_hits), crew=CrewScript())
+    payload = {"dataset": DatasetRef.from_csv(case.csv_text).model_dump(mode="json")}
+    result = await h.send(SkillId.PII_DETECT.value, payload, task_id="task-hard")
+    assert result.state == "TASK_STATE_COMPLETED", result.error
+    assert result.output is not None
+    found = {(f["row"], f["column"], f["kind"]) for f in result.output["findings"]}
+    want = {(f["row"], f["column"], f["kind"]) for f in case.truth["pii"]["findings"]}
+    extra_cols = {"reach", "tel", "notes"} & set(header)
+    assert extra_cols, header  # the seed was picked so the case has at least one such column
+    for col in extra_cols:  # every planted contact in those columns is found ...
+        assert {w for w in want if w[1] == col} <= found, col
+    assert not {f for f in found if f[1] in extra_cols | {"color"}} - want  # ... and no more
 
 
 def test_network_guard_blocks_external_connects(no_external_network: list[Any]) -> None:

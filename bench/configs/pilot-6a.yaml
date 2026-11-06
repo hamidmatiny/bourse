@@ -1,0 +1,21 @@
+# Phase 6a dev pilot (ADR-0051): sizing input, not a result.
+# 5 dev cases (people, orders, measurements, clinic, shipments) x B0-B3, plus B3 at
+# subtask_slots=1 for the measured serial/parallel speedup, one adversary (A5a sole-provider)
+# and the PII separation pilot (5 hard_pii dev cases sent straight to each PII agent).
+name: pilot-6a
+split: dev
+cases: 5
+configs:
+  - {id: B0, baseline: B0}
+  - {id: B1, baseline: B1}
+  - {id: B2, baseline: B2}
+  - {id: B3, baseline: B3, subtask_slots: 2}
+  - {id: B3-serial, baseline: B3, subtask_slots: 1}
+adversaries:
+  - {id: A5a, mode: sole-provider, runs: 12, honest_real: 3}
+pii_separation:
+  agents:
+    - vendor-c-pii-fast@vendor-c.local
+    - vendor-b-pii-precise@vendor-b.local
+  domains: [hard_pii]
+  cases: 5

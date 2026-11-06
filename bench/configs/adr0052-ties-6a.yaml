@@ -1,0 +1,17 @@
+# Phase 6a fix round 3 dev run (ADR-0051, ADR-0052). Dev split only; the test split is never read.
+# - PII: every dev hard_pii case (10 of 60) sent straight to pii-fast 1.0.0 and pii-precise 1.1.0:
+#   passed n/N, F1, byte-identical n/N, s/case, tokens/case vs the 8192 per-task budget.
+# - B2 (per-task seeded prior tie-break; code kept, not in the final configs) and B3 (seeded
+#   tie-break replacing agent_id order) on the first 5 dev cases, clean pool.
+name: adr0052-ties-6a
+split: dev
+cases: 5
+configs:
+  - {id: B2, baseline: B2}
+  - {id: B3, baseline: B3}
+pii_separation:
+  agents:
+    - vendor-c-pii-fast@vendor-c.local
+    - vendor-b-pii-precise@vendor-b.local
+  domains: [hard_pii]
+  cases: 10

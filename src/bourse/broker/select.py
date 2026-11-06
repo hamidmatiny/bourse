@@ -5,6 +5,9 @@ broken by agent_id ascending. Phase 3 PriorPolicy uses priors only; Phase 4 swap
 reliability, cost and latency behind the same SelectionPolicy protocol.
 """
 
+import hashlib
+import random
+import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -39,10 +42,21 @@ class PriorConfig:
 
 
 class PriorPolicy:
-    """Unknown agents or models get the highest configured price and latency (conservative)."""
+    """Unknown agents or models get the highest configured price and latency (conservative).
 
-    def __init__(self, config: PriorConfig) -> None:
+    Ties on utility go to agent_id order, or, with `tie_seed` (bench baseline B2, ADR-0051),
+    to sha256(tie_seed:subtask_id:agent_id) order: a seeded draw per task that does not
+    depend on how agents are named.
+    """
+
+    def __init__(self, config: PriorConfig, tie_seed: str | None = None) -> None:
         self.config = config
+        self.tie_seed = tie_seed
+
+    def _tie(self, subtask_id: str, agent_id: str) -> str:
+        if self.tie_seed is None:
+            return agent_id
+        return tie_key(self.tie_seed, subtask_id, agent_id)
 
     async def refresh(self, skill: SkillId, candidates: Sequence[AgentRecord]) -> None:
         return None
@@ -64,8 +78,9 @@ class PriorPolicy:
             for a in candidates
             if subtask.skill in a.skills
         ]
-        scored.sort(key=lambda c: (-c.terms.utility, c.agent_id))
+        scored.sort(key=lambda c: (-c.terms.utility, self._tie(subtask.id, c.agent_id)))
         ranked = [c.agent_id for c in scored]
+        tie = "agent_id" if self.tie_seed is None else "seeded hash per task"
         return SelectionDecision(
             subtask_id=subtask.id,
             skill=subtask.skill,
@@ -73,7 +88,7 @@ class PriorPolicy:
             chosen=ranked[0] if ranked else None,
             fallbacks=tuple(ranked[1:]),
             reason=(
-                "max utility (priors); ties by agent_id"
+                f"max utility (priors); ties by {tie}"
                 if ranked
                 else "no ACTIVE agent offers this skill"
             ),
@@ -91,7 +106,12 @@ class MeasuredConfig:
 
 
 EXPLORATION = "exploration"
-MEASURED = "max utility (measured; ties by agent_id)"
+MEASURED = "max utility (measured; ties by seeded hash per decision)"
+
+
+def tie_key(seed: str, *parts: object) -> str:
+    """Tie-break key that does not depend on how an agent is named (ADR-0051 fix round 3)."""
+    return hashlib.sha256(":".join([seed, *map(str, parts)]).encode()).hexdigest()
 
 
 class MeasuredPolicy:
@@ -101,13 +121,26 @@ class MeasuredPolicy:
 
     Exploration quota: when any candidate has fewer than min_trials attempts on this skill, every
     explore_every-th selection decision for the skill (counted from persisted
-    selection_decisions) goes to the least-tried candidate (ties by agent_id).
+    selection_decisions) goes to the least-tried candidate.
+
+    Exact utility ties and least-tried ties are broken by tie_key(tie_seed, decision index,
+    subtask id, agent_id), never by agent_id order: a name that sorts first would otherwise win
+    every tie (attacker-steerable). The default seed is a per-process secret, so the order
+    cannot be precomputed by choosing a name; the bench passes a per-case seed so runs are
+    reproducible (ADR-0051).
     """
 
-    def __init__(self, config: MeasuredConfig, priors: PriorConfig, ledger: LedgerRepository):
+    def __init__(
+        self,
+        config: MeasuredConfig,
+        priors: PriorConfig,
+        ledger: LedgerRepository,
+        tie_seed: str | None = None,
+    ):
         self.config = config
         self.priors = priors
         self.ledger = ledger
+        self.tie_seed = tie_seed if tie_seed is not None else secrets.token_hex(16)
         self._stats: dict[SkillId, dict[str, AgentStats]] = {}
         self._decisions: dict[SkillId, int] = {}
 
@@ -154,7 +187,12 @@ class MeasuredPolicy:
                 measured=measured,
             )
             scored.append(CandidateScore(agent_id=agent_id, terms=terms))
-        scored.sort(key=lambda c: (-c.terms.utility, c.agent_id))
+        index = self._decisions.get(subtask.skill, 0) + 1
+
+        def tie(agent_id: str) -> str:
+            return tie_key(self.tie_seed, index, subtask.id, agent_id)
+
+        scored.sort(key=lambda c: (-c.terms.utility, tie(c.agent_id)))
         ranked = [c.agent_id for c in scored]
         if not ranked:
             return SelectionDecision(
@@ -167,11 +205,10 @@ class MeasuredPolicy:
             )
         reason = MEASURED
         chosen = ranked[0]
-        index = self._decisions.get(subtask.skill, 0) + 1
         trials = {c.agent_id: c.terms.s + c.terms.f for c in scored}
         under = any(t < cfg.min_trials for t in trials.values())
         if len(ranked) > 1 and cfg.explore_every > 0 and index % cfg.explore_every == 0 and under:
-            chosen = min(ranked, key=lambda a: (trials[a], a))
+            chosen = min(ranked, key=lambda a: (trials[a], tie(a)))
             reason = EXPLORATION
         return SelectionDecision(
             subtask_id=subtask.id,
@@ -180,4 +217,35 @@ class MeasuredPolicy:
             chosen=chosen,
             fallbacks=tuple(a for a in ranked if a != chosen),
             reason=reason,
+        )
+
+
+RANDOM = "uniform random among ACTIVE (seeded)"
+
+
+class RandomPolicy:
+    """ADR-0051 baseline B1: uniform random choice among ACTIVE candidates for the skill.
+
+    Seeded: the same seed and the same sequence of decisions give the same choices. The
+    remaining candidates follow in a seeded random order as fallbacks.
+    """
+
+    def __init__(self, seed: str) -> None:
+        self.seed = seed
+        self._rng = random.Random(seed)
+
+    async def refresh(self, skill: SkillId, candidates: Sequence[AgentRecord]) -> None:
+        return None
+
+    def choose(self, subtask: Subtask, candidates: Sequence[AgentRecord]) -> SelectionDecision:
+        ids = sorted(a.agent_id for a in candidates if subtask.skill in a.skills)
+        self._rng.shuffle(ids)
+        neutral = UtilityTerms(reliability_lb=0.0, cost=0.0, latency=0.0, utility=0.0)
+        return SelectionDecision(
+            subtask_id=subtask.id,
+            skill=subtask.skill,
+            candidates=tuple(CandidateScore(agent_id=a, terms=neutral) for a in ids),
+            chosen=ids[0] if ids else None,
+            fallbacks=tuple(ids[1:]),
+            reason=RANDOM if ids else "no ACTIVE agent offers this skill",
         )

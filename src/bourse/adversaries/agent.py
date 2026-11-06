@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 import uvicorn
 from a2a.types import AgentCard
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from bourse.adversaries.behaviors import AdversaryExecutor
@@ -57,13 +57,21 @@ def serve_adversary(name: str, settings: Settings, meter_url: str, meter_key: st
     app = build_agent_app(executor, card)
 
     @app.post("/bourse/reset-behavior")
-    def reset_behavior() -> dict[str, object]:
+    def reset_behavior(honest_real: int | None = None) -> dict[str, object]:
         """Clear sleeper prefix counter + behavior log before admission exam (ADR-0042).
 
-        Exam tasks count toward EXAM_TASKS+HONEST_REAL; reset sets both to a clean prefix.
+        Exam tasks count toward EXAM_TASKS+honest_real; reset sets both to a clean prefix.
+        `?honest_real=N` sets this adversary's honest e2e phase (ADR-0051); omitted keeps it.
         """
-        executor.reset_behavior()
-        return {"ok": True, "completed": executor._completed, "log_len": 0}
+        if honest_real is not None and honest_real < 0:
+            raise HTTPException(status_code=422, detail="honest_real must be >= 0")
+        executor.reset_behavior(honest_real)
+        return {
+            "ok": True,
+            "completed": executor._completed,
+            "log_len": 0,
+            "honest_real": executor.honest_real,
+        }
 
     @app.get("/bourse/behavior-log")
     def behavior_log() -> dict[str, object]:

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.11.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -296,6 +296,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "rfc8785" },
     { name = "slack-bolt" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -337,6 +338,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.14.2" },
     { name = "pydantic-settings", specifier = "==2.16.2" },
     { name = "python-dotenv", specifier = "==1.2.4" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "slack-bolt", specifier = "==1.30.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.1.6" },

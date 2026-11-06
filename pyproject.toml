@@ -29,6 +29,7 @@ dependencies = [
     "pydantic==2.14.2",
     "pydantic-settings==2.16.2",
     "python-dotenv==1.2.4",
+    "pyyaml==6.0.3",
     "rfc8785==0.1.4",
     "slack-bolt==1.30.0",
     "sqlalchemy[asyncio]==2.1.6",

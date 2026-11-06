@@ -21,6 +21,8 @@ COPY alembic ./alembic
 COPY alembic.ini otel-collector.yaml ./
 COPY config ./config
 COPY tests/fixtures/datasets ./tests/fixtures/datasets
+# Bench manifests (seeds + sha256) and configs; the stale-image guard tracks them (ADR-0051).
+COPY bench ./bench
 RUN uv sync --locked --no-dev \
     && useradd --uid 10001 --create-home bourse \
     && mkdir -p /app/data \

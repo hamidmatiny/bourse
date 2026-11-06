@@ -19,6 +19,8 @@ from bourse.contracts.skills_io import (
     UnitsOut,
 )
 
+# Bump on any change to a grader or threshold; bench manifests record it (ADR-0051).
+GRADER_VERSION = "1"
 STATS_TOL = 1e-6
 UNITS_TOL = 1e-9
 REPORT_TOL = 1e-6

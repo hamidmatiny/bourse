@@ -99,6 +99,10 @@ def broken_server(kind: str) -> MCPServer[Any]:
         async def sin_check(numbers: list[str]) -> ChecksOut:
             raise ToolError("broken")
 
+        @server.tool()
+        async def contact_check(values: list[str], kinds: list[str]) -> ChecksOut:
+            raise ToolError("broken")
+
     else:
 
         @server.tool()

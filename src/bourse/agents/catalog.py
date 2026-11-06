@@ -72,12 +72,15 @@ def agent_specs(large_model: str, small_model: str) -> dict[str, AgentSpec]:
             vendor_domain="vendor-b.local",
             vendor_org="Vendor B",
             display_name="Vendor B PII Precise",
-            description="Cell-level PII detection; names identified by an LLM crew.",
-            version="1.0.0",
+            description=(
+                "Cell-level PII detection; names, contact columns and contacts in free text "
+                "proposed by an LLM and accepted by deterministic checks."
+            ),
+            version="1.1.0",  # ADR-0052: contact_check step; re-signed, re-examined
             skills=(SkillId.PII_DETECT,),
             model=large_model,
             port=55402,
-            mcp={"pii": PII_TOOLS, "table": frozenset({"sample_rows"})},
+            mcp={"pii": PII_TOOLS | {"contact_check"}, "table": frozenset({"sample_rows"})},
         ),
         "pii_fast": AgentSpec(
             name="pii_fast",

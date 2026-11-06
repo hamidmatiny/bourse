@@ -14,5 +14,12 @@ that cannot be checked.
 ## Consequences
 - A final number is traceable to one commit and one manifest.
 
+## Amendment (Phase 6a, ADR-0051)
+The manifest stores seeds and per-case sha256s (cases are regenerated and must match); its own
+sha256 is pinned in `<manifest>.sha256`. `--final` also requires the roster model digests from
+Ollama `/api/ps` to match the config, and records git sha, manifest hash, digests and the Ollama
+environment. The git check runs on the host (`bench preflight`); the container re-checks the
+manifest and digests. Loading the test split without the final guard is refused in code.
+
 ## Status
-Accepted (Phase 0). Implementation: Phases 6–7.
+Accepted (Phase 0). Implementation: Phases 6a–7.

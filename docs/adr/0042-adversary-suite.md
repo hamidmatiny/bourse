@@ -137,5 +137,12 @@ The table above and the "exposure = e2e only" definition are superseded:
   first deviant task was a canary `run-…:pii:1`, `first_bad` unresolved, strikes=1 < k=3.
 - The sleeper prefix is unchanged: canaries still do not consume it.
 
+## Amendment (Phase 6a, ADR-0051): honest phase per adversary
+
+`POST /bourse/reset-behavior?honest_real=N` sets the sleeper's honest e2e phase after the exam
+(prefix = EXAM_TASKS + N; default HONEST_REAL = 3). Each behavior-log event records its
+`prefix_target`, and the phase5 invariant checks deviations against it. `run_phase5(...,
+honest_real={id: N})` passes it per adversary; the bench records it in every adversary row.
+
 ## Status
-Accepted (Phase 5b; fix round 3; fix round 4 in Phase 5c).
+Accepted (Phase 5b; fix round 3; fix round 4 in Phase 5c; honest_real in 6a).

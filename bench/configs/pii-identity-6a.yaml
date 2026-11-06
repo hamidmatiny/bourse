@@ -1,0 +1,11 @@
+# Phase 6a fix round 1 (ADR-0052): the PII separation pilot alone, re-run with
+# output_sha256 recorded, to observe (not infer) whether pii-fast and pii-precise return
+# byte-identical outputs on the same 5 hard_pii dev cases as pilot-6a.
+name: pii-identity-6a
+split: dev
+pii_separation:
+  agents:
+    - vendor-c-pii-fast@vendor-c.local
+    - vendor-b-pii-precise@vendor-b.local
+  domains: [hard_pii]
+  cases: 5

@@ -145,9 +145,8 @@ uv run bourse keys gen --vendor vendor-b.local
 uv run bourse keys gen --vendor vendor-c.local
 uv run bourse probe
 docker compose build
-uv run bourse stack up --mode compose   # writes data/run/env/*.env, waits for health
-uv run bourse stack register            # vendors + 5 agents; exams start automatically
-uv run bourse stack wait-active         # until 5/5 ACTIVE (default: exam_timeout_s+120)
+uv run bourse stack up --mode compose   # env files, health, register 5 agents, exams, 5/5 ACTIVE
+                                        # (exits 1 with "STACK UP FAILED: <reason>" otherwise)
 docker compose --profile test run --rm egress-probe   # 2 attributed egress events
 docker compose run --rm broker bourse e2e all --repeat 3   # data/e2e/e2e-<utc>.json
 uv run bourse usage maxcall             # tokens per call per model; num_ctx rule (ADR-0038)

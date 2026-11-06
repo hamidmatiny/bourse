@@ -47,6 +47,7 @@ class BehaviorEvent:
     counts_for_prefix: bool
     awake: bool
     deviated: bool
+    prefix_target: int = PREFIX_BEFORE_DEVIATE  # EXAM_TASKS + honest_real for this instance
 
 
 def _inner(spec: AgentSpec, runtime: AgentRuntime) -> SkillExecutor:
@@ -73,12 +74,22 @@ class AdversaryExecutor(SkillExecutor):
         self._completed = 0  # every finished execute (incl. canary); debug/compat
         self._prefix_count = 0  # exam + e2e only; drives sleeper awake
         self._behavior_log: list[BehaviorEvent] = []
+        self.honest_real = HONEST_REAL  # e2e tasks honest after the exam (ADR-0051 per adversary)
 
-    def reset_behavior(self) -> None:
+    @property
+    def prefix_before_deviate(self) -> int:
+        return EXAM_TASKS + self.honest_real
+
+    def reset_behavior(self, honest_real: int | None = None) -> None:
         """Clear prefix counters + log (called by /bourse/reset-behavior before exam).
 
-        Exam tasks count toward PREFIX_BEFORE_DEVIATE; canaries do not.
+        Exam tasks count toward the prefix (EXAM_TASKS + honest_real); canaries do not.
+        `honest_real` None keeps the current value (default HONEST_REAL).
         """
+        if honest_real is not None:
+            if honest_real < 0:
+                raise ValueError("honest_real must be >= 0")
+            self.honest_real = honest_real
         self._completed = 0
         self._prefix_count = 0
         self._behavior_log.clear()
@@ -90,7 +101,7 @@ class AdversaryExecutor(SkillExecutor):
         return await self._inner.run_skill(ctx, payload)
 
     def _awake(self) -> bool:
-        return self._prefix_count >= PREFIX_BEFORE_DEVIATE
+        return self._prefix_count >= self.prefix_before_deviate
 
     def _record(
         self,
@@ -109,6 +120,7 @@ class AdversaryExecutor(SkillExecutor):
                 counts_for_prefix=counts,
                 awake=awake,
                 deviated=deviated,
+                prefix_target=self.prefix_before_deviate,
             )
         )
         self._completed += 1

@@ -83,6 +83,42 @@ def sin_valid(number: str) -> bool:
     return luhn_valid(digits)
 
 
+# contact_check (ADR-0052): deterministic shape check for findings an LLM proposed. It never
+# finds anything by itself; it only accepts or rejects (value, kind) pairs.
+_EMAIL = _PATTERNS[0][1]
+_AT = re.compile(r"\s*[\[\(\{<]\s*at\s*[\]\)\}>]\s*|\s+at\s+", re.IGNORECASE)
+_DOT = re.compile(r"\s*[\[\(\{<]\s*dot\s*[\]\)\}>]\s*|\s+dot\s+", re.IGNORECASE)
+# NANP anywhere in the text, or an international number: "+", 1-3 digit country code, then
+# digit groups with single space/dot/dash separators; 8-15 digits in total (E.164 max 15).
+_NANP_IN_TEXT = re.compile(r"(?<!\d)" + _PATTERNS[2][1].pattern + r"(?!\d)")
+_INTL = re.compile(r"(?<![\w+])\+\d{1,3}(?:[ .-]?\(?\d{1,5}\)?){1,6}(?!\d)")
+ContactKind = Literal["EMAIL", "PHONE", "CARD", "SIN"]
+
+
+def deobfuscate_email(value: str) -> str:
+    return _DOT.sub(".", _AT.sub("@", value.strip()))
+
+
+def contact_valid(value: str, kind: ContactKind) -> bool:
+    text = value.strip()
+    if kind == "EMAIL":
+        return _EMAIL.fullmatch(deobfuscate_email(text)) is not None
+    if kind == "PHONE":
+        if _NANP_IN_TEXT.search(text):
+            return True
+        return any(8 <= sum(c.isdigit() for c in m.group(0)) <= 15 for m in _INTL.finditer(text))
+    if kind == "CARD":
+        return classify(text) == "CARD" and luhn_valid(text)
+    return sin_valid(text)
+
+
+def contact_check_impl(values: list[str], kinds: list[ContactKind]) -> ChecksOut:
+    check_size(*values)
+    if len(values) != len(kinds):
+        raise ValueError("values and kinds must have the same length")
+    return ChecksOut(results=[contact_valid(v, k) for v, k in zip(values, kinds, strict=True)])
+
+
 def regex_scan_impl(values: list[str]) -> RegexScanOut:
     check_size(*values)
     found = [
@@ -120,5 +156,11 @@ def build_server() -> MCPServer[Any]:
     async def sin_check(numbers: list[str]) -> ChecksOut:
         """Canadian SIN validity: 9 digits, Luhn-valid, first digit not 0 or 8."""
         return await run_limited(lambda: sin_check_impl(numbers))
+
+    @server.tool()
+    async def contact_check(values: list[str], kinds: list[ContactKind]) -> ChecksOut:
+        """Accept/reject proposed (value, kind) PII pairs: EMAIL after [at]/[dot] de-obfuscation,
+        PHONE as NANP or +country number anywhere in the text, CARD Luhn, SIN check."""
+        return await run_limited(lambda: contact_check_impl(values, kinds))
 
     return server

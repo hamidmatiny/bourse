@@ -64,6 +64,10 @@ app.add_typer(trust_app, name="trust")
 app.add_typer(approve_app, name="approve")
 app.add_typer(approver_app, name="approver")
 
+from bourse.bench.cli import bench_app  # noqa: E402 (sub-app module imports typer app objects above)
+
+app.add_typer(bench_app, name="bench")
+
 
 def _pkg_version(name: str) -> str:
     try:
@@ -576,14 +580,15 @@ def stack_up(
         bool,
         typer.Option(
             "--with-adversaries",
-            help="After honest agents are registered and ACTIVE, start the adversaries profile",
+            help="After the honest agents are ACTIVE, also start the adversaries profile",
         ),
     ] = False,
 ) -> None:
     """compose: isolated containers with egress control (ADR-0034); host: local processes.
 
-    `--with-adversaries` registers honest agents, waits until 5/5 ACTIVE, then starts the
-    adversaries profile. Do not use raw `docker compose --profile adversaries up`.
+    compose always registers the honest agents and waits until every one is ACTIVE (admission
+    exams); any failure exits 1 with "STACK UP FAILED: <reason>". `--with-adversaries` then also
+    starts the adversaries profile. Do not use raw `docker compose --profile adversaries up`.
     """
     from bourse.stack.launcher import (
         HOST_MODE_WARNING,
@@ -643,17 +648,34 @@ def stack_up(
         from bourse.stack.activation import _sample_ollama_resident
 
         _sample_ollama_resident(settings, echo=typer.echo, warn_roster=True)
-        if not with_adversaries:
-            raise typer.Exit(0)
-        rows, accepted, total = register_all(settings, "compose")
+        # Always register + wait for the admission exams (6a fix round 3): a healthy stack with
+        # no ACTIVE agents is not "up". Registration is idempotent (unchanged cards: no-op).
+        try:
+            rows, accepted, total = register_all(settings, "compose")
+        except Exception as exc:  # registry unreachable, key missing, ...
+            typer.echo(
+                f"STACK UP FAILED: registration error: {type(exc).__name__}: {exc}", err=True
+            )
+            dump_activation_diagnostics(typer.echo)
+            raise typer.Exit(1) from exc
         typer.echo(table(rows))
         typer.echo(f"registered {accepted}/{total} ACCEPTED")
-        if accepted != total:
+        if total == 0 or accepted != total:
+            typer.echo(
+                f"STACK UP FAILED: registered {accepted}/{total} ACCEPTED (expected all)", err=True
+            )
             dump_activation_diagnostics(typer.echo)
             raise typer.Exit(1)
         if wait_agents_active(settings, echo=typer.echo) != 0:
+            typer.echo(
+                "STACK UP FAILED: not every agent is ACTIVE (exam failed or timed out); "
+                "see the exam table above",
+                err=True,
+            )
             dump_activation_diagnostics(typer.echo)
             raise typer.Exit(1)
+        if not with_adversaries:
+            raise typer.Exit(0)
         adv = compose("--profile", "adversaries", "up", "-d", "--remove-orphans", check=False)
         typer.echo((adv.stdout + adv.stderr).strip())
         if adv.returncode != 0:

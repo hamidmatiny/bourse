@@ -200,3 +200,38 @@ async def test_selection_decisions_persisted_with_terms(beds: list[BrokerBed]) -
         assert s.chosen is not None and len(s.candidates) == 1
         assert s.candidates[0].terms.cost_norm is not None
     assert {r.subtask_id for r in bed.ledger.rows} == {"profile", "stats", "pii", "units", "report"}
+
+
+ATTACKER = "aaa-attacker@x.local"  # sorts before every vendor-* name
+TIED = [record(ATTACKER), record("vendor-b-pii@vendor-b.local"), record("vendor-c-pii@c.local")]
+
+
+@pytest.mark.parametrize("explore_every", [0, 1])
+async def test_name_that_sorts_first_gets_no_tie_advantage(explore_every: int) -> None:
+    """ADR-0051 fix round 3: equal (cold) candidates tie exactly; with agent_id ordering the
+    `aaa-…` name would win 300/300. With the seeded hash it wins about 1/3, for both the
+    utility tie (explore_every=0) and the least-tried exploration tie (explore_every=1)."""
+    cfg = MeasuredConfig(explore_every=explore_every)
+    wins = 0
+    for i in range(300):
+        policy = MeasuredPolicy(cfg, PriorConfig(), InMemoryLedgerRepository(), tie_seed=f"c{i}")
+        decision = await choose(policy, TIED)
+        assert len({c.terms.utility for c in decision.candidates}) == 1  # a real exact tie
+        wins += decision.chosen == ATTACKER
+    assert 70 <= wins <= 130, wins
+    same = MeasuredPolicy(cfg, PriorConfig(), InMemoryLedgerRepository(), tie_seed="c7")
+    again = MeasuredPolicy(cfg, PriorConfig(), InMemoryLedgerRepository(), tie_seed="c7")
+    assert (await choose(same, TIED)).chosen == (await choose(again, TIED)).chosen
+
+
+async def test_default_tie_seed_is_a_per_process_secret_not_name_order() -> None:
+    a = MeasuredPolicy(MeasuredConfig(explore_every=0), PriorConfig(), InMemoryLedgerRepository())
+    b = MeasuredPolicy(MeasuredConfig(explore_every=0), PriorConfig(), InMemoryLedgerRepository())
+    assert len(a.tie_seed) == 32 and a.tie_seed != b.tie_seed
+    picks = set()
+    for _ in range(40):
+        policy = MeasuredPolicy(
+            MeasuredConfig(explore_every=0), PriorConfig(), InMemoryLedgerRepository()
+        )
+        picks.add((await choose(policy, TIED)).chosen)
+    assert len(picks) > 1  # not always the same (name-ordered) winner

@@ -160,6 +160,8 @@ class Delegator:
         task_max_calls: int = 20,
         usage_lookup: Callable[[str], Awaitable[list[Any]]] | None = None,
         contention_queue_fraction: float = 0.5,
+        spot_checks: bool = True,
+        report_violations: bool = True,
     ) -> None:
         self.registry = registry
         self.http = http
@@ -177,6 +179,9 @@ class Delegator:
         self._input_rounds: dict[str, int] = {}
         self._usage_lookup = usage_lookup
         self._contention_fraction = contention_queue_fraction
+        # ADR-0051 baselines B1/B2 turn both off (no trust engine); B3 keeps both on.
+        self.spot_checks = spot_checks
+        self.report_violations = report_violations
         # Ordered log of A2A messages actually sent (tasks + canaries); phase5 exposure.
         self.deliveries: list[Delivery] = []
 
@@ -391,6 +396,16 @@ class Delegator:
                 except ValidationError:
                     return record(DelegationState.FAILED_CONTRACT, "invalid_output"), None, "", None
                 await self._check_misreport(agent.agent_id, task_id, result.artifact_metadata)
+                dumped = output.model_dump(mode="json")
+                if not self.spot_checks:
+                    if await self._queue_contention(task_id):
+                        return (
+                            record(DelegationState.CONTENTION, "queue_wait"),
+                            dumped,
+                            "queue_wait_ms > fraction of deadline",
+                            None,
+                        )
+                    return (record(DelegationState.COMPLETED, None), dumped, "", None)
                 check = spot_check(subtask.skill, payload, output, task_id)
                 if not check.passed:
                     await self._report(
@@ -401,7 +416,6 @@ class Delegator:
                     )
                     failed = record(DelegationState.FAILED_SPOTCHECK, "spotcheck")
                     return failed, None, check.detail, False
-                dumped = output.model_dump(mode="json")
                 if await self._queue_contention(task_id):
                     return (
                         record(DelegationState.CONTENTION, "queue_wait"),
@@ -423,6 +437,8 @@ class Delegator:
                 self.inflight.remove(handle)
 
     async def _report(self, agent_id: str, kind: str, severity: Severity, evidence: str) -> None:
+        if not self.report_violations:
+            return
         try:
             await self.registry.report_violation(
                 agent_id, ViolationReport(kind=kind, severity=severity, evidence=evidence)

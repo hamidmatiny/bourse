@@ -81,6 +81,23 @@ class DelegationRecord(BaseModel):
     at: datetime
 
 
+class BrokerControls(BaseModel):
+    """Trust controls the broker applies (ADR-0051). B3 = all on; B1/B2 = all off.
+
+    report_violations off means the trust engine never hears from this broker (no strikes,
+    no quarantine from runtime evidence); spot_checks off means outputs are not spot-checked;
+    canaries off means no canary is sent; task_budgets off means no per-task meter budget is
+    registered, which only works against a meter with require_task_budget=False (ADR-0051).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    spot_checks: bool = True
+    report_violations: bool = True
+    canaries: bool = True
+    task_budgets: bool = True
+
+
 class Delivery(BaseModel):
     """One A2A message actually sent to an agent (task or canary), in send order.
 

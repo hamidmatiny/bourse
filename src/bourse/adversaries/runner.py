@@ -2,7 +2,7 @@
 
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -112,6 +112,7 @@ class ScenarioReport:
     harmed_task_ids: list[str] = field(default_factory=list)
     quarantine_reason: str = ""
     quarantine_severity: str = ""  # HARD | SOFT | ""
+    honest_real: int | None = None  # sleeper honest e2e phase requested (ADR-0051); None = default
 
 
 class InvariantViolation(Exception):
@@ -543,20 +544,27 @@ async def _revoke_vendor_x(
 
 
 async def _reset_adversary_behavior(
-    client: httpx.AsyncClient, name: str, port: int, echo: Callable[[str], None] = print
+    client: httpx.AsyncClient,
+    name: str,
+    port: int,
+    echo: Callable[[str], None] = print,
+    honest_real: int | None = None,
 ) -> None:
     """Clear in-process sleeper counters so admission exams see honest behavior.
 
-    Exam tasks count toward the sleeper prefix (EXAM_TASKS+HONEST_REAL); canaries do not.
+    Exam tasks count toward the sleeper prefix (EXAM_TASKS+honest_real); canaries do not.
+    `honest_real` (ADR-0051) sets the adversary's honest e2e phase; None keeps its default.
     """
     url = f"http://{agent_hostname(name, VENDOR)}:{port}/bourse/reset-behavior"
+    params = {} if honest_real is None else {"honest_real": str(honest_real)}
     try:
-        resp = await client.post(url, timeout=10.0)
+        resp = await client.post(url, params=params, timeout=10.0)
     except httpx.HTTPError as exc:
         raise InfraNotReady(f"reset-behavior {name}: {type(exc).__name__}") from exc
     if resp.status_code != 200:
         raise InfraNotReady(f"reset-behavior {name}: HTTP {resp.status_code}")
-    echo(f"  reset-behavior {name} ok (exam counts toward prefix; canaries do not)")
+    shown = "default" if honest_real is None else str(honest_real)
+    echo(f"  reset-behavior {name} ok honest_real={shown} (exam counts; canaries do not)")
 
 
 async def _fetch_behavior_log(
@@ -685,10 +693,11 @@ def _check_invariants(
                 f"{report.id}/{report.mode}: quarantine index {q_idx} > exposure {report.exposure}"
             )
     for ev in behavior_events:
-        if bool(ev.get("deviated")) and int(ev.get("prefix_before", 0)) < PREFIX_BEFORE_DEVIATE:
+        target = int(ev.get("prefix_target", PREFIX_BEFORE_DEVIATE))
+        if bool(ev.get("deviated")) and int(ev.get("prefix_before", 0)) < target:
             errors.append(
                 f"{report.id}/{report.mode}: behavior log deviated with "
-                f"prefix_before={ev.get('prefix_before')} < {PREFIX_BEFORE_DEVIATE} "
+                f"prefix_before={ev.get('prefix_before')} < {target} "
                 f"(exam counts; canaries do not)"
             )
             break
@@ -1147,6 +1156,7 @@ async def run_phase5(
     echo: Callable[[str], None] = print,
     reset_honest: bool = False,
     reuse_agent: bool = False,
+    honest_real: Mapping[str, int] | None = None,
 ) -> Phase5Report:
     wanted = [a.id for a in ADVERSARIES]
     extra = ["A1", "A1b", "A2", "A3", "A9"]
@@ -1275,7 +1285,13 @@ async def run_phase5(
                 else:
                     await _revoke_vendor_x(client, base, headers)
                     # Sleeper/patient counters live in the agent process; reset before exam.
-                    await _reset_adversary_behavior(client, adv.name, spec.port, echo=echo)
+                    await _reset_adversary_behavior(
+                        client,
+                        adv.name,
+                        spec.port,
+                        echo=echo,
+                        honest_real=(honest_real or {}).get(adv.id),
+                    )
                     # One registration + exam for all modes (REVOKED is terminal).
                     outcome = await _register(client, base, _card_url(adv.name, spec.port))
                     agent_id = None if outcome is None else outcome.agent_id
@@ -1615,6 +1631,8 @@ async def run_phase5(
     harmed = sum(r.harmed_tasks for r in reports)
     delegated = sum(r.exposure for r in reports)
     denom = final_t if final_t else 5
+    for r in reports:
+        r.honest_real = (honest_real or {}).get(r.id)
     report = Phase5Report(
         at=stamp,
         canary_every=CANARY_EVERY,

@@ -1,0 +1,368 @@
+{
+  "split": "dev",
+  "generator_version": "1",
+  "grader_version": "1",
+  "base_seed": "bourse-bench-dev-1",
+  "cases": [
+    {
+      "case_id": "dev-0000-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:0",
+      "sha256": "31061b4ec6b25d0c62df3fc0da0f9fb649d0e4741ff27696d908ddc324e1514e"
+    },
+    {
+      "case_id": "dev-0001-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:1",
+      "sha256": "a2d8ac5de21518db8fdbf7f1dbf1a451fdb3c15295aecc30df6dc9aa131c5757"
+    },
+    {
+      "case_id": "dev-0002-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:2",
+      "sha256": "e4ee52dbef2fa8e5f81a477664a9dd7f6b3db9841363de3c74d9e98531577bfb"
+    },
+    {
+      "case_id": "dev-0003-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:3",
+      "sha256": "bf9af7137b2c1eae7948806b73939744c1c3546a5abc02e76e977ecee9331cb5"
+    },
+    {
+      "case_id": "dev-0004-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:4",
+      "sha256": "10896a04e4c640f3c16af21dd7cbd455edec03e0131f121da6d83a5fa5260c75"
+    },
+    {
+      "case_id": "dev-0005-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:5",
+      "sha256": "083f6385ea47235281c5dc12976c67a5e11d2ed4f5868823f39b9a640e4040b2"
+    },
+    {
+      "case_id": "dev-0006-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:6",
+      "sha256": "80d3d7cc7f1e80c76f06847dd49e8df1617b2a0638a9509993ffdac8a35ea2cb"
+    },
+    {
+      "case_id": "dev-0007-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:7",
+      "sha256": "f08d9964cbcfbd04c743ebbdcd3171a5e11e65ea5f81e253217379e76427519d"
+    },
+    {
+      "case_id": "dev-0008-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:8",
+      "sha256": "eb874944c2121de1fcf4023f7dda2e16193fce04df98cd68a33574d561d3435e"
+    },
+    {
+      "case_id": "dev-0009-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:9",
+      "sha256": "b3dd9f76061c41bc3ff12e2737f1e20d0fa1aa9d56232165b86e0003e6e1387f"
+    },
+    {
+      "case_id": "dev-0010-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:10",
+      "sha256": "858b9bfe445991fb8b9cfa74e3dc29d7c56454aaef5e9abf186982556907598e"
+    },
+    {
+      "case_id": "dev-0011-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:11",
+      "sha256": "3c9fca7fda9e07dacfdcd81106524fe5118e84a2f3655eb67297459c1088cf9d"
+    },
+    {
+      "case_id": "dev-0012-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:12",
+      "sha256": "2c9dbd71c961494c580864a0c594c6eec4577d2982f6ac68aa1f5044a89dc818"
+    },
+    {
+      "case_id": "dev-0013-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:13",
+      "sha256": "8c2fabdd26dab9bca50ba50ef1ac2d017d5d9ce188870703265026a2889faf99"
+    },
+    {
+      "case_id": "dev-0014-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:14",
+      "sha256": "5879673374f24661544c95c5c18ed3c85e8404ae462c5c335892450ead7acb04"
+    },
+    {
+      "case_id": "dev-0015-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:15",
+      "sha256": "867da7be87d42bc6097e11951b97d341e7e1303ef6d9e0624538792aaef809b2"
+    },
+    {
+      "case_id": "dev-0016-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:16",
+      "sha256": "70c8f703ce3ec2ec5d2007ab71fc21831ae7070161dec3f31feb284d7ab4b7d8"
+    },
+    {
+      "case_id": "dev-0017-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:17",
+      "sha256": "0675f66f33ada7c811bd5e78291a626dddde4c5278721d528cb52a08a2565ff7"
+    },
+    {
+      "case_id": "dev-0018-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:18",
+      "sha256": "782d1013c6a0d1e45f70dc279a3c487c0879c50f726d9b1b93f9f1aa6e1af74e"
+    },
+    {
+      "case_id": "dev-0019-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:19",
+      "sha256": "094de539b9537af2c5c125915639c482a812f250ab6f9c355694e41fe766c319"
+    },
+    {
+      "case_id": "dev-0020-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:20",
+      "sha256": "0228e06234f6b64f3206e00d17d2321d9f0d38644bcd73834ca6775e240878b6"
+    },
+    {
+      "case_id": "dev-0021-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:21",
+      "sha256": "383896943ffaca2a291bfc249bf3882c09a7e4dc7351a3b5e484d251d264c40f"
+    },
+    {
+      "case_id": "dev-0022-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:22",
+      "sha256": "7ef27d7bb52404b189656a54859d8630fb161202e0b61dfe8013ea595df806b6"
+    },
+    {
+      "case_id": "dev-0023-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:23",
+      "sha256": "1ee63cf56178301a3bb37c2a3d11a0d1b0ee61370e2ae12efbf6610816f322c6"
+    },
+    {
+      "case_id": "dev-0024-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:24",
+      "sha256": "60b60b0bcd056831c16cf22596e5b6be1db4fc284e71f7f9c40c6c1d05eca3f0"
+    },
+    {
+      "case_id": "dev-0025-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:25",
+      "sha256": "13543bf121766ce32a2188002ce12fd5f74cdfd549fc679e9d67eb0395b26675"
+    },
+    {
+      "case_id": "dev-0026-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:26",
+      "sha256": "b5b4db339c80cbb4230c95618eb25230ecb11e6674a05a7d0a137356d717b02d"
+    },
+    {
+      "case_id": "dev-0027-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:27",
+      "sha256": "7ec194de4efbe9c1c2d98c65ed207675e42c252b93cbb58bb2e96fabf8faaba5"
+    },
+    {
+      "case_id": "dev-0028-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:28",
+      "sha256": "98b57104ddca8809cadc87f0d3c0d797ea54a34b65db0fabc067f23d8dd1e95f"
+    },
+    {
+      "case_id": "dev-0029-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:29",
+      "sha256": "438a84f98de13475627ba778e8dcec7040ced1a3004f405279cf7e55c92ddbaf"
+    },
+    {
+      "case_id": "dev-0030-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:30",
+      "sha256": "9a1e45104b732cb6747f2d2949d7759f6693310f09848cd9178042dc100b8ebe"
+    },
+    {
+      "case_id": "dev-0031-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:31",
+      "sha256": "eeeefb5f9dc1f9482894a937476b73eb99ea6656a7e2b8aac11c2d59ad3c3c51"
+    },
+    {
+      "case_id": "dev-0032-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:32",
+      "sha256": "01f51508b59cf7ef0a104f0f18f333456c34bcc2d0732f942e2cbabc7e21913b"
+    },
+    {
+      "case_id": "dev-0033-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:33",
+      "sha256": "29e45c17ec04a57f16a3213da793e2780a8baea8a6d79fb33d56c78957d411ce"
+    },
+    {
+      "case_id": "dev-0034-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:34",
+      "sha256": "56bce2126bae18034db1d2abb354a72fc91ab627a4b9569ad06aa77bb3dcfa2f"
+    },
+    {
+      "case_id": "dev-0035-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:35",
+      "sha256": "17104035e10bbb9afa17287f315204662cbf9e1d2da36a2c5460be8efa1acac6"
+    },
+    {
+      "case_id": "dev-0036-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:36",
+      "sha256": "4b4df5fea5490b8da74045e7ee96049b1226e11c15d944d2e3bf24595f2b7936"
+    },
+    {
+      "case_id": "dev-0037-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:37",
+      "sha256": "006c3ab4aeee51d68e8c889e63f4e17db395408e27d7c59fed0725427a4895e5"
+    },
+    {
+      "case_id": "dev-0038-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:38",
+      "sha256": "cdbe9b602a96fcc204e650de9b94af6219874f5812a36462f66f199891620e6d"
+    },
+    {
+      "case_id": "dev-0039-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:39",
+      "sha256": "e3f505525ebfef809f1aa5b88ef4c3b8a1009f4d51a5bbc221afe932ca52050f"
+    },
+    {
+      "case_id": "dev-0040-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:40",
+      "sha256": "06f59e043e03b6e989f20391e254e3bc572b025160475b8c5f9c5cd10686d9ea"
+    },
+    {
+      "case_id": "dev-0041-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:41",
+      "sha256": "66a5a2272fe602d560f662ceb33ec217d374dce110fb51e69d6206343d4665a7"
+    },
+    {
+      "case_id": "dev-0042-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:42",
+      "sha256": "924a0c10b0e85975e8496143abff07422349a34e5dfeeaed838dcc7d2d6ae46a"
+    },
+    {
+      "case_id": "dev-0043-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:43",
+      "sha256": "5a6faae7b1e4c0a5871a09158ae32ba80739151e0b41a348651ea432420a834c"
+    },
+    {
+      "case_id": "dev-0044-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:44",
+      "sha256": "30138d2945d9c35dbff3b237845e49a5944d86a2862c8ba8b12b584fd1f9ebfe"
+    },
+    {
+      "case_id": "dev-0045-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:45",
+      "sha256": "744f860c9513f15400e576059822b9cbc575c28e0bf0c9037cc5daf221513568"
+    },
+    {
+      "case_id": "dev-0046-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:46",
+      "sha256": "066d0143c5ae956c9a0bf7c005fe146a9aaf35fb705878fa0334f81f3f44fb09"
+    },
+    {
+      "case_id": "dev-0047-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:47",
+      "sha256": "df536e9a43de601386bcba71d432f674d536b63d636d82082f09df7e4fe5c247"
+    },
+    {
+      "case_id": "dev-0048-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:48",
+      "sha256": "9e4cf6fe308952c8feadd1e499ddf126e4695301b0f909b730d104716f0319df"
+    },
+    {
+      "case_id": "dev-0049-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:49",
+      "sha256": "5546a7024d5a08e42f3e01d72ec0fd13c71855a0bea1ce10ce9b916d47e395b3"
+    },
+    {
+      "case_id": "dev-0050-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:50",
+      "sha256": "3931e8d2ffcd84140122e0cfdae342d1a978433bd886820bf4e09f81ccd83a8f"
+    },
+    {
+      "case_id": "dev-0051-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:51",
+      "sha256": "9da1c09669b6a425895ed4bd40a211b9b313e0899d11416d9a52d7cdb036851f"
+    },
+    {
+      "case_id": "dev-0052-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:52",
+      "sha256": "c68f434a0d8c9ac06e4b48eb93df9595e75e2db3dbcf05a2e85b717106b33cf6"
+    },
+    {
+      "case_id": "dev-0053-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:53",
+      "sha256": "46c3fdbcf302c97a295730518c87564820110f6cff6623e157ded42007c2065a"
+    },
+    {
+      "case_id": "dev-0054-people",
+      "domain": "people",
+      "seed": "bench-dev:bourse-bench-dev-1:54",
+      "sha256": "3bacd796a5ab3284c6534010f590e74796f9bf0168219128a4cdc5ae2620fe8c"
+    },
+    {
+      "case_id": "dev-0055-orders",
+      "domain": "orders",
+      "seed": "bench-dev:bourse-bench-dev-1:55",
+      "sha256": "12ff07cfa3e993da6c713d500b3515dd7c291553a21c06d899f0b528570043b9"
+    },
+    {
+      "case_id": "dev-0056-measurements",
+      "domain": "measurements",
+      "seed": "bench-dev:bourse-bench-dev-1:56",
+      "sha256": "6411d1e609dd2f579813d0b6b8b042ef45b4b3fb779c3e30a494fad3358928ef"
+    },
+    {
+      "case_id": "dev-0057-clinic",
+      "domain": "clinic",
+      "seed": "bench-dev:bourse-bench-dev-1:57",
+      "sha256": "f957234dca7d5841c2baf8e51b340f9bdb32757cd71971b1485bbf0749c41f18"
+    },
+    {
+      "case_id": "dev-0058-shipments",
+      "domain": "shipments",
+      "seed": "bench-dev:bourse-bench-dev-1:58",
+      "sha256": "2693e90658425b4765bed60d52fbe7e0737e5f75bfeadabf5f2879e967066636"
+    },
+    {
+      "case_id": "dev-0059-hard_pii",
+      "domain": "hard_pii",
+      "seed": "bench-dev:bourse-bench-dev-1:59",
+      "sha256": "f2705a92aad0bfc173696e83396bb63c13d6f03c91efa4f8ad898178420a0a59"
+    }
+  ]
+}

@@ -52,3 +52,5 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0048](0048-slack-approver-reinstatement.md) | SlackApprover (Socket Mode) + reinstatement flow | 5c |
 | [0049](0049-exam-infra-attribution.md) | Exam INFRA attribution, INCONCLUSIVE, global exam concurrency | 5c |
 | [0050](0050-stale-image-guard.md) | Stale-image guard on compose stack up | 5c |
+| [0051](0051-bourse-bench-design.md) | BOURSE-Bench: baselines B0-B3, ablations, generator, frozen split, harness, sizing | 6a |
+| [0052](0052-pii-precise-llm-detection.md) | pii-precise 1.1.0: LLM-proposed contacts accepted by deterministic contact_check | 6a |

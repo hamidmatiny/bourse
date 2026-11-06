@@ -8,6 +8,7 @@ from bourse.contracts.approval import (
     ViolationKindCount,
 )
 from bourse.contracts.broker import (
+    BrokerControls,
     CandidateScore,
     DelegationRecord,
     DelegationState,
@@ -54,6 +55,7 @@ __all__ = [
     "ApprovalFacts",
     "ApprovalRequest",
     "ApprovalTrigger",
+    "BrokerControls",
     "BudgetSpec",
     "CandidateScore",
     "CardRevision",

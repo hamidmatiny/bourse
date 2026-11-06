@@ -26,10 +26,11 @@ from bourse.broker.select import (
     MeasuredPolicy,
     PriorConfig,
     PriorPolicy,
+    RandomPolicy,
     SelectionPolicy,
 )
 from bourse.config import Settings
-from bourse.contracts.broker import DelegationState, IntakeReport, RunStatus
+from bourse.contracts.broker import BrokerControls, DelegationState, IntakeReport, RunStatus
 from bourse.contracts.metering import BudgetSpec
 from bourse.contracts.skills_io import DatasetRef
 from bourse.contracts.tasks import IntakeRequest
@@ -44,7 +45,7 @@ from bourse.mcp_servers.usage import SqlToolUsageRepository
 from bourse.meter.repo_sql import SqlMeterRepository
 from bourse.runtime.breaker import GLOBAL_BREAKER, CircuitBreaker
 from bourse.runtime.budget import BudgetLedger
-from bourse.runtime.executor import LlmOnlyExecutor
+from bourse.runtime.executor import PoolExecutor
 from bourse.runtime.resident import ResidentMonitor, metrics_path, monitoring, ollama_sampler
 from bourse.stack.launcher import BROKER_METER_ID, admin_token, load_secrets, meter_key
 from bourse.stack.smoke import DEFAULT_DATASET_DIR
@@ -122,11 +123,18 @@ async def broker_from_settings(
     policy: str = "measured",
     *,
     canary_every: int | None = None,
+    controls: BrokerControls | None = None,
+    subtask_slots: int | None = None,
+    random_seed: str = "bench",
 ) -> AsyncIterator[Session]:
-    """Broker wired to the local stack, with ledger, MeasuredPolicy (or PriorPolicy for
-    baselines), OTel export and the resident memory guard running in the background."""
+    """Broker wired to the local stack, with ledger, MeasuredPolicy (or PriorPolicy /
+    RandomPolicy for ADR-0051 baselines), OTel export and the resident memory guard running in
+    the background. `controls` switches broker trust controls (default: all on)."""
     setup_tracing("bourse-broker", settings.otel_exporter_otlp_endpoint)
+    ctl = controls or BrokerControls()
     every = settings.bourse_canary_every if canary_every is None else canary_every
+    if not ctl.canaries:
+        every = 0
     engine = create_async_engine(settings.bourse_database_url)
     deadline_s = settings.bourse_broker_delegation_deadline_s
     timeout = httpx.Timeout(deadline_s + DEADLINE_GRACE_S + 30)
@@ -175,20 +183,28 @@ async def broker_from_settings(
                 deadline_s=deadline_s,
                 ledger=recorder,
                 inflight=inflight,
-                budgets=MeterBudgetClient(
-                    http, settings.bourse_meter_url, meter_key(BROKER_METER_ID)
+                budgets=(
+                    MeterBudgetClient(http, settings.bourse_meter_url, meter_key(BROKER_METER_ID))
+                    if ctl.task_budgets
+                    else None
                 ),
                 task_max_tokens=settings.bourse_task_max_tokens,
                 task_max_calls=settings.bourse_task_max_calls,
                 usage_lookup=lambda task_id: usage.list_usage(task_id=task_id),
                 contention_queue_fraction=settings.bourse_contention_queue_fraction,
+                spot_checks=ctl.spot_checks,
+                report_violations=ctl.report_violations,
             )
             priors = prior_config(settings)
-            chosen_policy: SelectionPolicy = (
-                PriorPolicy(priors)
-                if policy == "prior"
-                else MeasuredPolicy(measured_config(settings), priors, ledger)
-            )
+            chosen_policy: SelectionPolicy
+            if policy == "prior":
+                chosen_policy = PriorPolicy(priors)
+            elif policy == "random":
+                chosen_policy = RandomPolicy(random_seed)
+            elif policy == "measured":
+                chosen_policy = MeasuredPolicy(measured_config(settings), priors, ledger)
+            else:
+                raise ValueError(f"unknown selection policy {policy!r}")
             from bourse.approval.select import select_approver
 
             broker = Broker(
@@ -200,7 +216,7 @@ async def broker_from_settings(
                 policy=chosen_policy,
                 runs=runs,
                 usage=usage,
-                executor=LlmOnlyExecutor(settings.ollama_num_parallel),
+                executor=PoolExecutor(subtask_slots or settings.ollama_num_parallel),
                 breaker=GLOBAL_BREAKER,
                 checkpointer=saver,
                 wall_budget_s=settings.bourse_broker_wall_budget_s,
@@ -214,14 +230,18 @@ async def broker_from_settings(
             secret = settings.bourse_honeytoken_secret.get_secret_value() or str(
                 load_secrets()["honeytoken_secret"]
             )
-            broker.canaries = CanaryRunner(
-                ledger=ledger,
-                recorder=recorder,
-                delegator=delegator,
-                registry=registry,
-                tokens=SqlHoneytokenRepository(engine),
-                secret=secret.encode(),
-                every=every,
+            broker.canaries = (
+                None
+                if every <= 0
+                else CanaryRunner(
+                    ledger=ledger,
+                    recorder=recorder,
+                    delegator=delegator,
+                    registry=registry,
+                    tokens=SqlHoneytokenRepository(engine),
+                    secret=secret.encode(),
+                    every=every,
+                )
             )
             async with monitoring(monitor):
                 yield Session(broker, ledger, monitor)

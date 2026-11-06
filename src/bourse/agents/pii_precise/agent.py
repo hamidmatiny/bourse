@@ -1,5 +1,7 @@
 """PII-Precise (CrewAI): deterministic regex/Luhn/SIN via MCP; a CrewAI crew (qwen via the
-meter) picks PERSON_NAME columns from table.sample_rows output.
+meter) picks PERSON_NAME columns from table.sample_rows output; since 1.1.0 (ADR-0052) two
+submit-tool calls propose contact columns and contacts in free text, accepted only by the
+deterministic MCP contact_check (extra.py).
 
 crewai 1.6.1 agents invoke tools through ReAct text (Action / Action Input), not native
 function calling, so the submit tool is a CrewAI BaseTool whose arguments are validated by
@@ -29,6 +31,7 @@ from bourse.agents.common.pii_pipeline import (
 )
 from bourse.agents.common.spec import METER_TASK_HEADER
 from bourse.agents.pii_precise import isolation
+from bourse.agents.pii_precise.extra import extra_findings
 from bourse.contracts.skills_io import PiiIn, PiiOut
 
 MAX_KICKOFFS = 2
@@ -62,6 +65,11 @@ def run_crew(
         name: str = "submit"
         description: str = "Submit the final answer: name_columns, a list of column names."
         args_schema: type[BaseModel] = SubmitArgs
+        # The submit result ends the task (crewai AgentFinish). Without it the crew asked for a
+        # separate "Final Answer" turn that often came back empty and re-ran the whole ReAct
+        # loop: in dev run adr0052-ties-6a 9/10 tasks repeated the same 2 calls 3 times,
+        # ~5.4-6.2k tokens of the per-task budget (ADR-0052 amendment 2).
+        result_as_answer: bool = True
 
         def _run(self, *args: Any, **kwargs: Any) -> str:
             submitted.append({k: v for k, v in kwargs.items() if k not in CREWAI_INJECTED_ARGS})
@@ -89,7 +97,7 @@ def run_crew(
         verbose=False,
     )
     task = Task(
-        description=prompt + "\nAfter calling submit, reply with Final Answer: done.",
+        description=prompt + "\nCall the submit tool exactly once; its result is the answer.",
         expected_output="done",
         agent=analyst,
     )
@@ -143,4 +151,6 @@ class PiiPreciseExecutor(SkillExecutor):
                 "invalid_llm_output", f"no valid submit after {MAX_KICKOFFS} crew runs"
             )
         findings += name_findings(names.name_columns, columns, flagged)
+        # 1.1.0 (ADR-0052): LLM-proposed, contact_check-accepted findings; union only.
+        findings += await extra_findings(ctx, columns, flagged | set(names.name_columns))
         return PiiOut(findings=ordered(findings, header))

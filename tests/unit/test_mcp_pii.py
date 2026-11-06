@@ -98,3 +98,38 @@ async def test_mcp_round_trip_luhn_check() -> None:
         )
     assert not result.is_error
     assert result.structured_content == {"results": [True, False]}
+
+
+@pytest.mark.parametrize(
+    ("value", "kind", "ok"),
+    [
+        ("anna [at] mail [dot] com", "EMAIL", True),
+        ("a.b at post dot ca", "EMAIL", True),
+        ("x(at)inbox(dot)org", "EMAIL", True),
+        ("Bo {AT} host {DOT} net", "EMAIL", True),
+        ("leave at door", "EMAIL", False),  # " at " alone is not an address
+        ("red", "EMAIL", False),
+        ("call 416-555-0199 after 5pm", "PHONE", True),
+        ("+44 20 7946 0123", "PHONE", True),
+        ("+81 3-5555-0042", "PHONE", True),
+        ("+1 (604) 555-0100", "PHONE", True),
+        ("call on arrival", "PHONE", False),
+        ("order +5", "PHONE", False),  # too few digits for a phone
+        ("v2.3.1", "PHONE", False),
+        ("4111 1111 1111 1111", "CARD", True),
+        ("4111 1111 1111 1112", "CARD", False),  # Luhn-invalid decoy
+        ("130 692 544", "SIN", True),
+        ("130692545", "SIN", False),
+    ],
+)
+def test_contact_check_accepts_only_contact_shapes(value: str, kind: str, ok: bool) -> None:
+    from bourse.mcp_servers.pii import contact_check_impl
+
+    assert contact_check_impl([value], [kind]).results == [ok]  # type: ignore[list-item]
+
+
+def test_contact_check_length_mismatch_is_an_error() -> None:
+    from bourse.mcp_servers.pii import contact_check_impl
+
+    with pytest.raises(ValueError, match="same length"):
+        contact_check_impl(["a"], [])
