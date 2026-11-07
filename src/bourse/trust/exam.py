@@ -34,11 +34,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 import httpx
 
 from bourse.broker.delegate import MeterBudgetClient
 from bourse.contracts.exam import ExamProgress, ExamReport, ExamTaskOutcome
-from bourse.contracts.metering import TaskBudget
+from bourse.contracts.metering import TaskBudget, TaskBudgetStatus
 from bourse.contracts.skills import SkillId
 from bourse.contracts.trust import Severity, TrustState, Violation
 from bourse.crypto.jcs import card_from_dict
@@ -47,6 +48,13 @@ from bourse.registry.repo import Repository
 from bourse.registry.state import transition
 from bourse.stack.smoke import CallResult, build_input, send_task
 from bourse.trust.exam_bank import EXAM_NS, generate
+from bourse.trust.exam_fault import (
+    Attribution,
+    FaultEvidence,
+    MeterRow,
+    attribute_exam_failure,
+    rows_from_usage,
+)
 from bourse.trust.honeytokens import Honeytoken, derive
 from bourse.trust.repo import TokenStore
 
@@ -56,6 +64,13 @@ EXAM_FAILED = "EXAM_FAILED"
 EXAM_INCONCLUSIVE = "EXAM_INCONCLUSIVE"
 EXAM_TIMEOUT = "EXAM_TIMEOUT"
 INFRA = "INFRA"
+METER_STATUS_TIMEOUT_S = 5.0
+
+
+def _line_detail(o: ExamTaskOutcome) -> str:
+    if o.fault is None:
+        return o.detail
+    return f"{o.detail} fault={o.fault} rule={o.fault_rule} evidence={o.evidence}"
 
 
 class MeterUnavailable(RuntimeError):
@@ -86,21 +101,22 @@ def is_exam_infra_failure(
     contention_queue_fraction: float = 0.5,
     usage_contention: bool = False,
 ) -> bool:
-    """True when the failure is infrastructure, not agent quality (ADR-0049)."""
+    """True when a failed (not timed-out) task is infrastructure, not the agent (ADR-0049).
+
+    A thin view over `attribute_exam_failure` (the one attribution function) for callers that
+    only have the agent's report plus a contention flag."""
+    rows = [MeterRow(status=200, queue_wait_ms=queue_wait_ms)]
     if usage_contention:
-        return True
-    blob = f"{error_kind} {error} {detail}".lower()
-    if "contention" in blob:
-        return True
-    if error_kind == "llm_unavailable" or "llm_unavailable" in blob:
-        return True
-    if any(marker in blob for marker in (" status 50", " 500", " 502", " 503", " 504")):
-        return True
-    if error_kind == "deadline" or "deadlineexceeded" in blob or blob.startswith("deadline:"):
-        limit_ms = task_deadline_s * contention_queue_fraction * 1000.0
-        if queue_wait_ms > limit_ms:
-            return True
-    return False
+        rows.append(MeterRow(status=429, error_kind="contention"))
+    ev = FaultEvidence(
+        timed_out=False,
+        meter=None,
+        rows=tuple(rows),
+        task_deadline_s=task_deadline_s,
+        contention_queue_fraction=contention_queue_fraction,
+        claim=f"{error_kind} {error} {detail}",
+    )
+    return attribute_exam_failure(ev).fault == "infra"
 
 
 @dataclass(frozen=True)
@@ -255,18 +271,34 @@ class ExamRunner:
             return []
         return await self._usage_lookup(task_id)
 
-    async def _queue_wait_ms(self, task_id: str) -> float:
-        rows = await self._usage_rows(task_id)
-        return max((float(getattr(r, "queue_wait_ms", 0) or 0) for r in rows), default=0.0)
+    async def _meter_status(self, task_id: str) -> TaskBudgetStatus | None:
+        if self.budgets is None or not hasattr(self.budgets, "status"):
+            return None
+        try:
+            with anyio.fail_after(METER_STATUS_TIMEOUT_S):
+                return await self.budgets.status(task_id)
+        except (httpx.HTTPError, TimeoutError, ValueError):
+            return None
 
-    async def _usage_contention(self, task_id: str) -> bool:
-        rows = await self._usage_rows(task_id)
-        for r in rows:
-            if getattr(r, "error_kind", None) == "contention":
-                return True
-            if int(getattr(r, "status", 0) or 0) == 429:
-                return True
-        return False
+    async def _attribute(
+        self, task_id: str, *, timed_out: bool, task_deadline: float, claim: str = ""
+    ) -> Attribution:
+        """Collect meter evidence for one failed task and attribute it (ADR-0049 amendment 2)."""
+        meter = await self._meter_status(task_id)
+        try:
+            rows = rows_from_usage(await self._usage_rows(task_id))
+        except Exception:  # usage DB unavailable: evidence missing, never the agent's fault
+            rows = ()
+        return attribute_exam_failure(
+            FaultEvidence(
+                timed_out=timed_out,
+                meter=meter,
+                rows=rows,
+                task_deadline_s=task_deadline,
+                contention_queue_fraction=self.config.contention_queue_fraction,
+                claim=claim,
+            )
+        )
 
     async def _run_locked(self, agent_id: str, *, mode: str = "admission") -> ExamResult | None:
         agent = await self.repo.get_agent(agent_id)
@@ -302,7 +334,7 @@ class ExamRunner:
         )
         self._progress[agent_id] = prog
         try:
-            per_skill, task_outcomes, any_infra_left = await self._run_slots(
+            per_skill, task_outcomes, any_infra_left, decided_fail = await self._run_slots(
                 agent_id=agent_id,
                 card=card,
                 skills=agent.skills,
@@ -314,9 +346,9 @@ class ExamRunner:
             self._progress.pop(agent_id, None)
         n = sum(per_skill.values())
 
-        total = cfg.k * len(per_skill)
-        skill_ok = all(p >= cfg.pass_n for p in per_skill.values())
-        inconclusive = any_infra_left
+        total = cfg.k * len(agent.skills)
+        skill_ok = not decided_fail and all(p >= cfg.pass_n for p in per_skill.values())
+        inconclusive = any_infra_left and not decided_fail
         ok = skill_ok and not inconclusive
         label = "admission" if mode == "admission" else "reinstate"
         self._echo(
@@ -377,12 +409,20 @@ class ExamRunner:
         per_task_deadline: float,
         exam_deadline: float,
         prog: _Progress,
-    ) -> tuple[dict[str, int], list[ExamTaskOutcome], bool]:
+    ) -> tuple[dict[str, int], list[ExamTaskOutcome], bool, bool]:
+        """Returns (per_skill passed, outcomes, any INFRA left, decided_fail).
+
+        decided_fail: some skill has more agent-attributable failures (grader-failed / ERROR)
+        than k - pass_n allows, so no retry or reschedule can make the exam pass. The exam
+        stops there and is EXAM_FAILED, never INCONCLUSIVE (ADR-0049 amendment, 6b).
+        """
         per_skill: dict[str, int] = {}
         task_outcomes: list[ExamTaskOutcome] = []
         any_infra_left = False
+        allowed_failures = self.config.k - self.config.pass_n
         for skill in skills:
             passed = 0
+            failed = 0
             for _ in range(self.config.k):
                 prog.skill = skill.value
                 prog.task_n += 1
@@ -399,8 +439,17 @@ class ExamRunner:
                     passed += 1
                 elif outcome.outcome in (INFRA, EXAM_TIMEOUT):
                     any_infra_left = True
+                else:
+                    failed += 1
+                if failed > allowed_failures:
+                    per_skill[skill.value] = passed
+                    self._echo(
+                        f"exam {agent_id} {skill.value}: {failed} agent-attributable failures > "
+                        f"{allowed_failures} allowed; exam cannot pass, stopping"
+                    )
+                    return per_skill, task_outcomes, any_infra_left, True
             per_skill[skill.value] = passed
-        return per_skill, task_outcomes, any_infra_left
+        return per_skill, task_outcomes, any_infra_left, False
 
     async def _run_slot(
         self,
@@ -474,10 +523,16 @@ class ExamRunner:
                         bourse_kind="exam",
                     )
             except TimeoutError:
-                qw = await self._queue_wait_ms(task_id)
-                last = infra(
-                    task_id,
-                    f"{EXAM_TIMEOUT}: task deadline {task_deadline:.0f}s; queue_wait_ms={qw:.0f}",
+                att = await self._attribute(task_id, timed_out=True, task_deadline=task_deadline)
+                last = ExamTaskOutcome(
+                    skill=skill.value,
+                    task_id=task_id,
+                    outcome=INFRA if att.fault == "infra" else "ERROR",
+                    detail=f"{EXAM_TIMEOUT}: task deadline {task_deadline:.0f}s",
+                    infra_retries=infra_retries,
+                    fault=att.fault,
+                    fault_rule=att.rule,
+                    evidence=att.evidence,
                 )
             except MeterUnavailable as exc:
                 last = infra(task_id, f"meter: {exc}")
@@ -501,20 +556,14 @@ class ExamRunner:
                     infra_retries=infra_retries,
                 )
             assert last is not None
-            self._task_line(agent_id, skill.value, task_id, last.outcome, last.detail)
+            self._task_line(agent_id, skill.value, task_id, last.outcome, _line_detail(last))
             if last.outcome == INFRA and attempt < attempts - 1:
                 infra_retries += 1
                 await asyncio.sleep(cfg.infra_backoff_s * (attempt + 1))
                 continue
             break
         assert last is not None
-        return ExamTaskOutcome(
-            skill=last.skill,
-            task_id=last.task_id,
-            outcome=last.outcome,
-            detail=last.detail,
-            infra_retries=infra_retries,
-        )
+        return last.model_copy(update={"infra_retries": infra_retries})
 
     async def _grade_or_classify(
         self,
@@ -526,39 +575,29 @@ class ExamRunner:
         truth: dict[str, Any],
         infra_retries: int,
     ) -> ExamTaskOutcome:
-        cfg = self.config
         if result.state != "TASK_STATE_COMPLETED" or result.output is None:
-            qw = await self._queue_wait_ms(task_id)
-            cont = await self._usage_contention(task_id)
-            a2a_bits = [
-                f"state={result.state}",
-                f"error_kind={result.error_kind or '-'}",
-                f"error={result.error[:300] if result.error else '-'}",
-                f"queue_wait_ms={qw:.0f}",
-            ]
-            detail = "; ".join(a2a_bits)
-            if is_exam_infra_failure(
-                error_kind=result.error_kind or "",
-                error=result.error or "",
-                detail=detail,
-                task_deadline_s=task_deadline,
-                queue_wait_ms=qw,
-                contention_queue_fraction=cfg.contention_queue_fraction,
-                usage_contention=cont,
-            ):
-                return ExamTaskOutcome(
-                    skill=skill.value,
-                    task_id=task_id,
-                    outcome=INFRA,
-                    detail=detail,
-                    infra_retries=infra_retries,
-                )
+            detail = "; ".join(
+                [
+                    f"state={result.state}",
+                    f"error_kind={result.error_kind or '-'}",
+                    f"error={result.error[:300] if result.error else '-'}",
+                ]
+            )
+            att = await self._attribute(
+                task_id,
+                timed_out=False,
+                task_deadline=task_deadline,
+                claim=f"{result.error_kind or ''} {result.error or ''}",
+            )
             return ExamTaskOutcome(
                 skill=skill.value,
                 task_id=task_id,
-                outcome="ERROR",
+                outcome=INFRA if att.fault == "infra" else "ERROR",
                 detail=detail,
                 infra_retries=infra_retries,
+                fault=att.fault,
+                fault_rule=att.rule,
+                evidence=att.evidence,
             )
         g = grade(skill, result.output, truth)
         if g.passed:

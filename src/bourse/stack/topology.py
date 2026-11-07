@@ -413,6 +413,7 @@ def env_files(
     model_small: str,
     ollama_num_parallel: int = 2,
     exam_deadline_by_model: str = "",
+    stack_profile: str = "full",
 ) -> dict[str, str]:
     """Per-service env files for compose mode (written under data/run/env, never committed).
 
@@ -438,6 +439,8 @@ def env_files(
         "BOURSE_DEV_HOSTS": "",
         "OLLAMA_NUM_PARALLEL": str(ollama_num_parallel),
         "BOURSE_IN_COMPOSE": "1",
+        # ADR-0053: every service reads the same profile (registry, meter, sinkhole, broker).
+        "BOURSE_STACK_PROFILE": stack_profile,
     }
     out: dict[str, dict[str, str]] = {n.name: dict(common) for n in nodes() if n.command}
     settings = get_settings()

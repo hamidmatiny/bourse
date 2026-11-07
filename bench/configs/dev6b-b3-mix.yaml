@@ -1,0 +1,8 @@
+# Phase 6b dev validation: mixed pool admission, per-cell harm, timing (3 dev cases).
+name: dev6b-b3-mix
+split: dev
+cases: 3
+configs:
+- id: B3-mix
+  baseline: B3
+  pool: mixed

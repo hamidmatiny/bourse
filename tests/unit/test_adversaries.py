@@ -16,9 +16,9 @@ from bourse.adversaries.runner import (
     Phase5Report,
     ScenarioReport,
     _revoke_vendor_x,
-    classify,
     format_phase5,
     red,
+    scenario_verdict,
 )
 from bourse.agents.common.card import build_card
 from bourse.agents.common.spec import AgentRuntime, AgentSpec
@@ -257,21 +257,29 @@ async def test_revoke_vendor_x_skips_keep_agent() -> None:
     assert other_id in revoked
 
 
+def _st(actual: str, **kw: object) -> str:
+    return scenario_verdict(actual, **kw).status  # type: ignore[arg-type]
+
+
 def test_fetch_failed_is_error_not_caught() -> None:
-    assert classify("A4a", "FETCH_FAILED") == "error"
-    assert classify("A1", "FORGED_SIGNATURE", misbehaved=True) == "caught"
-    assert classify("A1", "TAMPERED", misbehaved=True) == "missed"
-    assert classify("A7-raw", "exam", misbehaved=True) == "caught"
-    assert classify("A7-raw", "EXAM_FAILED", misbehaved=True) == "caught"
-    assert classify("A5a", "CANARY_FAIL", misbehaved=True, quarantined=True) == "caught"
-    assert classify("A5a", "SPOTCHECK_FAIL", misbehaved=True, quarantined=True) == "caught"
-    assert classify("A5a", "SPOTCHECK_FAIL", misbehaved=True, quarantined=False) == "missed"
-    assert classify("A5a", "none", misbehaved=False) == "not-exposed"
-    assert classify("A5a", "none", misbehaved=True) == "missed"
-    assert classify("A8c", "CANARY_FAIL", misbehaved=True) == "missed"
-    assert classify("A5a", "AGENT_REVOKED", misbehaved=True) == "error (precondition)"
-    assert classify("A5a", "NOT_ACTIVE", misbehaved=False) == "error (precondition)"
-    assert classify("A5a", "REVOKED", registration_rejected=True) == "error (precondition)"
+    """Old classify() cases, now through the one classifier (ADR-0053 amendment 1)."""
+    assert _st("FETCH_FAILED") == "error"
+    assert _st("FORGED_SIGNATURE", registration_rejected=True) == "caught"
+    # A card that is ACCEPTED harms; it is missed whatever the expected stage was.
+    assert _st("ACCEPTED", harmed=1) == "missed"
+    assert _st("exam", registration_rejected=True) == "caught"
+    assert _st("EXAM_FAILED", registration_rejected=True) == "caught"
+    assert _st("none", stages=("CANARY_FAIL",), exposure=6, quarantined=True) == "caught"
+    assert _st("none", stages=("SPOTCHECK_FAIL",), exposure=6, quarantined=True) == "caught"
+    # A soft SPOTCHECK_FAIL below k strikes did not stop anything; the deviant output did.
+    v = scenario_verdict("none", stages=("SPOTCHECK_FAIL",), exposure=6, attempted=2)
+    assert (v.status, v.actual, v.signals) == ("missed", "none", ("SPOTCHECK_FAIL",))
+    assert _st("none", exposure=0) == "not-exposed"
+    assert _st("none", exposure=4) == "ineffective"
+    assert _st("none", exposure=4, attempted=1) == "missed"
+    for pre in ("AGENT_REVOKED", "NOT_ACTIVE", "REVOKED"):
+        v = scenario_verdict(pre)
+        assert v.status == "error" and v.actual == f"precondition: {pre}"
     report = _empty_report(
         ScenarioReport(
             id="A4a",
@@ -410,3 +418,50 @@ def _empty_report(*scenarios: ScenarioReport) -> Phase5Report:
         quarantine_events_honest=0,
         honest_false_quarantines="0/5",
     )
+
+
+def test_profile_runs_count_any_remaining_control_as_caught() -> None:
+    """ADR-0053 amendment 1: whatever control stops the attack is caught, named."""
+    # A7-raw under no-exam: the broker's INPUT_REQUIRED policy refuses the smuggle.
+    v = scenario_verdict("none", stages=("SESSION_SMUGGLING",), exposure=3, attempted=3)
+    assert (v.status, v.control) == ("caught", "session-policy")
+    # A1 under no-cardsig: accepted, nothing stopped it.
+    assert _st("ACCEPTED", harmed=1) == "missed"
+    # A1b under no-cardsig: the domain check still rejects it.
+    v = scenario_verdict("DOMAIN_MISMATCH", registration_rejected=True)
+    assert (v.status, v.control) == ("caught", "domain")
+    # Infra stays error in every profile.
+    assert _st("FETCH_FAILED", exposure=2, attempted=1) == "error"
+
+
+def test_card_harm_and_a4a_zero_effect_under_no_exam() -> None:
+    from bourse.adversaries.runner import _finish, card_harm
+
+    assert card_harm("ACCEPTED") == 1
+    assert card_harm("VERSION_ROLLBACK+ACCEPTED") == 1
+    assert card_harm("FORGED_SIGNATURE") == 0
+    assert card_harm("VERSION_ROLLBACK+VERSION_REUSE") == 0
+    a1 = _finish(
+        "A1", "A1", "ACCEPTED", "FORGED_SIGNATURE", mode="card", harmed=1, harm_total=1,
+        stack_profile="no-cardsig",
+    )  # fmt: skip
+    assert a1.status == "missed" and (a1.harmed_tasks, a1.harm_total) == (1, 1)
+    a4a = _finish(
+        "A4a",
+        "poison-loud",
+        "zero-effect",
+        "LINT_INJECTION",
+        delegations=6,
+        stack_profile="no-exam",
+    )
+    # Exposed, no control fired, no effect: ineffective, not caught (amendment 1).
+    assert (a4a.status, a4a.control, a4a.catch_stage) == ("ineffective", "", "zero-effect")
+    unexposed = _finish("A4a", "poison-loud", "zero-effect", "LINT_INJECTION", delegations=0)
+    assert unexposed.status == "not-exposed"
+
+
+def test_adversary_spec_baseline_runs_default_keeps_the_old_gate() -> None:
+    from bourse.contracts.bench import AdversarySpec
+
+    assert AdversarySpec(id="A1").baseline_runs == 3
+    assert AdversarySpec(id="A1", baseline_runs=1).baseline_runs == 1

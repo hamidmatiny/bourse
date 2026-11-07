@@ -14,9 +14,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from bourse.adversaries.pool import Pool
 from bourse.agents.common.spec import METER_TASK_HEADER
 from bourse.bench.harness import CellOutcome, CellRunner, SubtaskOutcome, adversary_key
 from bourse.bench.solo import run_solo
@@ -83,10 +85,20 @@ class BrokerCellRunner:
     """B1-B3: one broker run per cell. B1 reseeds its random policy per (case, repeat); B2 and
     B3 seed their tie-breaks per (case, repeat), hashed with the subtask (ADR-0051)."""
 
-    def __init__(self, broker: Broker, budget_spec: BudgetSpec, spec: ConfigSpec) -> None:
+    def __init__(
+        self,
+        broker: Broker,
+        budget_spec: BudgetSpec,
+        spec: ConfigSpec,
+        *,
+        pool: Pool | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.broker = broker
         self.budget_spec = budget_spec
         self.spec = spec
+        self.pool = pool  # mixed pool (6b): harm events and quarantines are collected per cell
+        self.settings = settings
 
     async def run_cell(self, case: BenchCase, repeat: int) -> CellOutcome:
         broker = self.broker
@@ -104,6 +116,13 @@ class BrokerCellRunner:
             budget=self.budget_spec,
         )
         started = time.monotonic()
+        since = datetime.now(UTC)
+        pool_fields: dict[str, Any] = {}
+        if self.pool is not None:
+            pool_fields = {
+                "pool_epoch": self.pool.epoch,
+                "pool_agents": tuple(sorted(self.pool.agent_ids)),
+            }
         try:
             report = await broker.start(request)
         except Exception as exc:  # one cell fails; the bench goes on and records it
@@ -118,7 +137,27 @@ class BrokerCellRunner:
                 wall_s=time.monotonic() - started,
                 contention_events=0,
                 error=f"{type(exc).__name__}: {exc}"[:300],
+                **pool_fields,
             )
+        if self.pool is not None and self.settings is not None:
+            from bourse.adversaries.pool import cell_harm_events, quarantined_members
+
+            served = tuple(
+                d.agent_id for d in report.delegations if d.agent_id in self.pool.agent_ids
+            )
+            lines, agents, attempts = await cell_harm_events(
+                self.settings, self.pool, served, since
+            )
+            pool_fields |= {
+                "delegations": len(report.delegations),
+                "adversary_served": served,
+                "harm_lines": tuple(lines),
+                "harm_agents": tuple(agents),
+                "attempt_agents": tuple(attempts),
+                "quarantined_adversaries": tuple(
+                    await quarantined_members(self.settings, self.pool)
+                ),
+            }
         rows = await broker.usage.list_usage(run_id=report.run_id)
         t_in, t_out, compute, c429 = usage_cost(rows)
         contention = c429 + sum(d.state is DelegationState.CONTENTION for d in report.delegations)
@@ -136,6 +175,7 @@ class BrokerCellRunner:
             wall_s=report.wall_ms / 1000,
             contention_events=contention,
             error=report.abort_reason,
+            **pool_fields,
         )
 
 
@@ -221,6 +261,12 @@ def session_factory(settings: Settings, echo: Callable[[str], None]) -> Callable
             finally:
                 await engine.dispose()
             return
+        pool: Pool | None = None
+        if spec.pool == "mixed":
+            from bourse.adversaries.pool import admit_pool
+
+            echo(f"config {spec.id}: admitting the mixed pool (ADR-0051, ADR-0053)")
+            pool = await admit_pool(settings, echo)
         async with broker_from_settings(
             settings,
             echo=echo,
@@ -228,7 +274,9 @@ def session_factory(settings: Settings, echo: Callable[[str], None]) -> Callable
             controls=controls_for(spec),
             subtask_slots=spec.subtask_slots,
         ) as session:
-            yield BrokerCellRunner(session.broker, budget(settings), spec)
+            yield BrokerCellRunner(
+                session.broker, budget(settings), spec, pool=pool, settings=settings
+            )
 
     return open_session
 
@@ -241,41 +289,85 @@ def adversary_runner(
     settings: Settings, echo: Callable[[str], None]
 ) -> Callable[[AdversarySpec], Any]:
     async def run(spec: AdversarySpec) -> list[AdversaryResult]:
-        from bourse.adversaries.runner import run_phase5
+        from bourse.adversaries.runner import SPEC_WALL_CAP, run_phase5
 
         started = time.monotonic()
-        report = await run_phase5(
-            settings,
-            runs=spec.runs,
-            only=[spec.id],
-            modes=[spec.mode] if spec.mode else None,
-            echo=echo,
-            honest_real={spec.id: spec.honest_real} if spec.honest_real is not None else None,
-        )
-        wall = time.monotonic() - started
         key = adversary_key(spec)
-        return [
-            AdversaryResult(
-                key=f"{key}#{i}",
-                id=r.id,
-                mode=r.mode,
-                honest_real=r.honest_real,
-                status="error" if r.status.startswith("error") else r.status,
-                actual=r.catch_stage,
-                expected=r.expected_stage,
-                exposure=r.exposure,
-                exposure_real=r.exposure_real,
-                canaries=r.canaries,
-                first_bad=_opt_int(r.first_bad_delegation),
-                detect_delay=_opt_int(r.detection_delay),
-                strikes=r.strikes,
-                harmed=r.harmed_tasks,
-                harmed_total=r.exposure,
-                spec_wall_s=wall,
-                finished_at=datetime.now(UTC),
+        report = None
+        # Per-spec wall cap (ADR-0053 amendment 1): a spec can never hold a segment for hours.
+        # Cleanup that must survive the cancel (selection gates) runs shielded in the runner.
+        with anyio.move_on_after(spec.wall_cap_s) as scope:
+            report = await run_phase5(
+                settings,
+                runs=spec.runs,
+                only=[spec.id],
+                modes=[spec.mode] if spec.mode else None,
+                echo=echo,
+                honest_real={spec.id: spec.honest_real} if spec.honest_real is not None else None,
+                baseline_runs=spec.baseline_runs,
             )
-            for i, r in enumerate(report.scenarios)
-        ]
+        wall = time.monotonic() - started
+        if scope.cancelled_caught or report is None:
+            cap = f"{SPEC_WALL_CAP} {spec.wall_cap_s:.0f}s"
+            echo(f"  {key}: {cap} reached after {wall:.0f}s; row recorded as error")
+            return [
+                AdversaryResult(
+                    key=f"{key}#0",
+                    id=spec.id,
+                    mode=spec.mode or "-",
+                    honest_real=spec.honest_real,
+                    status="error",
+                    actual=cap,
+                    expected="-",
+                    exposure=0,
+                    exposure_real=0,
+                    canaries=0,
+                    first_bad=None,
+                    detect_delay=None,
+                    strikes=0,
+                    harmed=0,
+                    harmed_total=0,
+                    spec_wall_s=wall,
+                    finished_at=datetime.now(UTC),
+                    rule="R1",
+                    note=cap,
+                )
+            ]
+        rows: list[AdversaryResult] = []
+        for i, r in enumerate(report.scenarios):
+            note = r.note
+            if r.status == "not-exposed":
+                note = spec.no_exposure_reason or (
+                    "UNEXPLAINED not-exposed (no delivery, no no_exposure_reason); " + note
+                )
+            rows.append(
+                AdversaryResult(
+                    key=f"{key}#{i}",
+                    id=r.id,
+                    mode=r.mode,
+                    honest_real=r.honest_real,
+                    status="error" if r.status.startswith("error") else r.status,
+                    actual=r.catch_stage,
+                    expected=r.expected_stage,
+                    exposure=r.exposure,
+                    exposure_real=r.exposure_real,
+                    canaries=r.canaries,
+                    first_bad=_opt_int(r.first_bad_delegation),
+                    detect_delay=_opt_int(r.detection_delay),
+                    strikes=r.strikes,
+                    harmed=r.harmed_tasks,
+                    harmed_total=r.exposure if r.harm_total is None else r.harm_total,
+                    spec_wall_s=wall,
+                    finished_at=datetime.now(UTC),
+                    control=r.control,
+                    attempted=r.attempted,
+                    signals=r.signals,
+                    exposure_target=r.exposure_target,
+                    rule=r.rule,
+                    note=note[:300],
+                )
+            )
+        return rows
 
     return run
 

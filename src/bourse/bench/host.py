@@ -166,3 +166,26 @@ def format_host(h: HostSummary | None) -> str:
 
 def _num(v: float | None) -> str:
     return "-" if v is None else f"{v:.2f}"
+
+
+CAFFEINATE = ("caffeinate", "-dimsu")
+
+
+def power_problems(s: HostSample) -> list[str]:
+    """Why a bench run must not start on this host now (6b): on battery, Low Power Mode, or
+    a power state pmset could not report. `bench launch --allow-battery` overrides."""
+    problems: list[str] = []
+    if s.error is not None or s.power_source is None:
+        problems.append(f"power source unknown (pmset: {s.error or 'no source line'})")
+    elif s.power_source != "AC Power":
+        problems.append(f"on {s.power_source} (battery {s.battery_pct}%)")
+    if s.low_power_mode is None:
+        problems.append("Low Power Mode unknown (pmset -g has no powermode line)")
+    elif s.low_power_mode:
+        problems.append("Low Power Mode is on (powermode 1)")
+    return problems
+
+
+def with_caffeinate(argv: Sequence[str]) -> list[str]:
+    """`caffeinate -dimsu <argv>`: no display, idle, disk or system sleep while argv runs."""
+    return [*CAFFEINATE, *argv]

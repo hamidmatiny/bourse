@@ -179,11 +179,15 @@ class ReinstateApplyRequest(BaseModel):
 
 
 class AvailabilityRequest(BaseModel):
-    """Selection gate only (ADR-0042). Does not change TrustState."""
+    """Selection gate only (ADR-0042). Does not change TrustState.
+
+    skill=None gates the agent for every skill; a skill gates it for searches on that skill
+    only (sole-provider exposure, ADR-0053 amendment 1)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     available: bool
+    skill: SkillId | None = None
 
 
 class ApiError(BaseModel):

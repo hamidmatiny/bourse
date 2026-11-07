@@ -71,10 +71,38 @@ def test_b0_only_needs_no_agents() -> None:
     assert agent_problems(only_b0, [], expected_honest=5) == []
 
 
+def _ac_host(monkeypatch: pytest.MonkeyPatch, **over: Any) -> None:
+    """Launch tests never call pmset: a fixed AC sample (or `over` fields)."""
+    from datetime import UTC, datetime
+
+    from bourse.bench import host, preflight
+    from bourse.contracts.bench import HostSample
+
+    fields: dict[str, Any] = {
+        "at": datetime.now(UTC),
+        "phase": "start",
+        "power_source": "AC Power",
+        "battery_pct": 100,
+        "battery_state": "charged",
+        "powermode": 0,
+        "low_power_mode": False,
+        "thermal_warning": False,
+        "cpu_speed_limit": None,
+        "load_1m": 1.0,
+        "load_5m": 1.0,
+        "load_15m": 1.0,
+    } | over
+    monkeypatch.setattr(
+        host, "sample", lambda phase, **k: HostSample(**(fields | {"phase": phase}))
+    )
+    monkeypatch.setattr(preflight, "fetch_profile", lambda url, timeout_s=10.0: "full")
+
+
 def test_bench_launch_refuses_and_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from bourse.bench import cli as bench_cli
     from bourse.bench import preflight
 
+    _ac_host(monkeypatch)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "c.yaml").write_text("name: pre\nconfigs: [{id: B2, baseline: B2}]\n")
     monkeypatch.setattr(preflight, "fetch_agents", lambda url, timeout_s=10.0: [])
@@ -98,6 +126,7 @@ def test_bench_launch_unreachable_registry_is_a_refusal(
     def down(url: str, timeout_s: float = 10.0) -> list[AgentRecord]:
         raise httpx.ConnectError("connection refused")
 
+    _ac_host(monkeypatch)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "c.yaml").write_text("name: pre\nconfigs: [{id: B3, baseline: B3}]\n")
     monkeypatch.setattr(preflight, "fetch_agents", down)
@@ -118,7 +147,7 @@ def _stub_stack(monkeypatch: pytest.MonkeyPatch, calls: list[str], register: Any
     monkeypatch.setattr(image_freshness, "stale_compose_images", lambda: [])
     monkeypatch.setattr(launcher, "set_mode", lambda m: None)
     monkeypatch.setattr(launcher, "verify_bourse_gone", lambda: ([], []))
-    monkeypatch.setattr(launcher, "write_compose_env", lambda s: ["x.env"])
+    monkeypatch.setattr(launcher, "write_compose_env", lambda *a: ["x.env"])
 
     def compose(*a: str, **k: Any) -> _Proc:
         calls.append("compose:" + a[0])
@@ -213,3 +242,37 @@ def test_run_where_every_cell_errored_is_reported_as_failed() -> None:
     ]
     assert _all_error_line([pii("ERROR"), pii("COMPLETED")], ran=2) == []
     assert _all_error_line([pii("ERROR")], ran=0) == []  # nothing ran (pure resume)
+
+
+def test_stack_up_writes_the_stack_profile_and_rejects_unknown_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bourse.cli as cli
+    from bourse.stack import launcher
+
+    calls: list[str] = []
+    _stub_stack(monkeypatch, calls, lambda s, m: ([["h"]], 5, 5))
+    profiles: list[str] = []
+
+    def write_env(s: Any, p: str = "full") -> list[str]:
+        profiles.append(p)
+        return ["x.env"]
+
+    monkeypatch.setattr(launcher, "write_compose_env", write_env)
+    res = CliRunner().invoke(
+        cli.app, ["stack", "up", "--mode", "compose", "--stack-profile", "no-exam"]
+    )
+    assert res.exit_code == 0, res.output
+    assert profiles == ["no-exam"] and "stack profile no-exam" in res.output
+    bad = CliRunner().invoke(cli.app, ["stack", "up", "--stack-profile", "no-broker"])
+    assert bad.exit_code != 0 and "--stack-profile must be one of" in bad.output
+
+
+def test_agent_state_line_flags_honest_quarantine() -> None:
+    from bourse.bench.preflight import agent_state_line
+
+    agents = [rec(a) for a in HONEST] + [rec("sleeper-loud@vendor-x.local", "QUARANTINED")]
+    ok = agent_state_line(agents)
+    assert ok == "honest agents at end: ACTIVE 5/5; not ACTIVE: none; adversaries QUARANTINED 1"
+    agents[0] = rec(HONEST[0], "QUARANTINED")
+    assert f"ACTIVE 4/5; not ACTIVE: {HONEST[0]}=QUARANTINED" in agent_state_line(agents)

@@ -176,3 +176,39 @@ async def test_availability_gate_hides_from_search_not_get(
     )
     listed3 = await client.get("/agents", params={"state": "ACTIVE"})
     assert any(a["agent_id"] == PROFILER_ID for a in listed3.json())
+
+
+async def test_per_skill_gate_hides_only_that_skill(
+    client: httpx.AsyncClient, vendor_a: Party
+) -> None:
+    """Sole-provider exposure (ADR-0053 amendment 1): the profiler is hidden for searches on
+    schema.profile only; other searches (other skills, no skill) still list it."""
+    await _onboard(client, vendor_a)
+    body = {
+        "vendor_domain": "vendor-a.local",
+        "card": vendor_a.sign(load_card("honest-a-profiler.json")),
+    }
+    assert (await client.post("/agents/register", json=body)).status_code == 201
+    await client.post(
+        f"/agents/{PROFILER_ID}/state", json={"to_state": "ACTIVE", "reason": "exam"}, headers=ADMIN
+    )
+
+    async def ids(skill: str | None) -> set[str]:
+        params = {"state": "ACTIVE"} | ({"skill": skill} if skill else {})
+        resp = await client.get("/agents", params=params)
+        return {a["agent_id"] for a in resp.json()}
+
+    gate = await client.post(
+        f"/agents/{PROFILER_ID}/availability",
+        json={"available": False, "skill": "schema.profile"},
+        headers=ADMIN,
+    )
+    assert gate.json() == {"agent_id": PROFILER_ID, "available": False, "skill": "schema.profile"}
+    assert PROFILER_ID not in await ids("schema.profile")
+    assert PROFILER_ID in await ids(None)
+    await client.post(
+        f"/agents/{PROFILER_ID}/availability",
+        json={"available": True, "skill": "schema.profile"},
+        headers=ADMIN,
+    )
+    assert PROFILER_ID in await ids("schema.profile")

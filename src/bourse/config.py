@@ -1,6 +1,7 @@
 """Settings from environment; `.env` is loaded with python-dotenv (never committed)."""
 
 from functools import lru_cache
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import SecretStr, model_validator
@@ -30,6 +31,11 @@ class Settings(BaseSettings):
     bourse_approver_key: SecretStr = SecretStr("")
     # Set to 1 inside compose containers (host CLI uses this for refuse-if-compose).
     bourse_in_compose: str = ""
+    # Stack profile (ADR-0053): one stack-side control removed for an ablation. Set by
+    # `bourse stack up --profile` in every service's env file; "full" everywhere else.
+    bourse_stack_profile: Literal["full", "no-exam", "no-cardsig", "no-sinkhole", "no-metercap"] = (
+        "full"
+    )
     # ADR-0047: both knobs equal the single roster model (aliases for compose/env).
     bourse_model_large: str = "qwen3.5:27b-q4_K_M"
     bourse_model_small: str = "qwen3.5:27b-q4_K_M"

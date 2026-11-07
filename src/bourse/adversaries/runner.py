@@ -12,6 +12,14 @@ import anyio
 import httpx
 
 from bourse.adversaries.catalog import ADVERSARIES, BY_ID, VENDOR, VENDOR_ORG
+from bourse.adversaries.outcome import (
+    DETECTIVE,
+    STAGE_CONTROL,
+    Evidence,
+    Verdict,
+    check_invariant,
+    classify_outcome,
+)
 from bourse.config import Settings
 from bourse.contracts.approval import ApprovalDecision
 from bourse.contracts.broker import RunStatus
@@ -30,10 +38,13 @@ DATASETS = ("people", "orders", "measurements")
 # Default exam wait = settings.bourse_exam_timeout_s + buffer (see exam_wait_s).
 # Keep a numeric fallback for unit tests that do not load settings.
 EXAM_WAIT_S = 1020.0
-INFRA_REASONS = frozenset({"FETCH_FAILED", "CARD_TOO_LARGE", "exam did not finish", "timeout"})
+INFRA_REASONS = frozenset(
+    {"FETCH_FAILED", "CARD_TOO_LARGE", "exam did not finish", "exam inconclusive", "timeout"}
+)
 # Agent not usable for the scenario (e.g. re-register after REVOKED) — never "missed".
 PRECONDITION_REASONS = frozenset({"AGENT_REVOKED", "NOT_ACTIVE", "REVOKED"})
-STATUS_ERROR_PRECONDITION = "error (precondition)"
+# Prefix of the actual stage when a spec hit its wall cap (bench AdversarySpec.wall_cap_s).
+SPEC_WALL_CAP = "spec wall cap"
 EXPECTED: dict[str, frozenset[str]] = {
     "A1": frozenset({"FORGED_SIGNATURE"}),
     "A1b": frozenset({"DOMAIN_MISMATCH"}),
@@ -55,12 +66,11 @@ EXPECTED: dict[str, frozenset[str]] = {
     "A8b-patient": frozenset({"deadline"}),
     "A8c": frozenset({"USAGE_MISREPORT"}),
 }
-# Honest pii.detect providers temporarily gated for sole-provider A5 scenarios.
-HONEST_PII_AGENT_IDS = (
-    "vendor-b-pii-precise@vendor-b.local",
-    "vendor-c-pii-fast@vendor-c.local",
-)
 SOLE_PROVIDER_MAX_RUNS = 12
+# Exposure guarantee (ADR-0053 amendment 1): a sole-provider row aims for k real deliveries,
+# k = EXPOSURE_K + the e2e prefix the script stays honest for; at most this many extra runs.
+EXPOSURE_K = 3
+EXPOSURE_SPARE_RUNS = 3
 MIXED_A5_RUNS = 6
 REQUIRED_SERVICES = (
     "postgres",
@@ -101,7 +111,7 @@ class ScenarioReport:
     zero_effect: bool | None = None
     note: str = ""
     runs: int = 0
-    status: str = "missed"  # caught | missed | error | not-exposed
+    status: str = "missed"  # caught | missed | ineffective | not-exposed | error (outcome.py)
     mode: str = "mixed"  # mixed | sole-provider | card
     exposure: int = 0  # A2A deliveries to the adversary: e2e tasks + canaries (ADR-0042)
     exposure_real: int = 0  # e2e task deliveries only
@@ -113,28 +123,18 @@ class ScenarioReport:
     quarantine_reason: str = ""
     quarantine_severity: str = ""  # HARD | SOFT | ""
     honest_real: int | None = None  # sleeper honest e2e phase requested (ADR-0051); None = default
+    # Denominator of harmed_tasks when it is not `exposure` (card: 1 registration; ADR-0053).
+    harm_total: int | None = None
+    stack_profile: str = "full"
+    control: str = ""  # control that stopped the attack (caught only)
+    attempted: int = 0  # attack actions observed (egress events, deviant outputs, stops)
+    signals: str = ""  # controls that fired without stopping it, "+"-joined
+    exposure_target: int = 0  # k real deliveries the scenario aimed for (0 = none)
+    rule: str = ""  # R1..R5 of the outcome classification
 
 
 class InvariantViolation(Exception):
     """Phase5 column/invariant check failed; abort the run."""
-
-
-# Registration / exam rejection stages that count as caught without a quarantine transition.
-REGISTRATION_CATCH_STAGES = frozenset(
-    {
-        "LINT_INJECTION",
-        "FORGED_SIGNATURE",
-        "DOMAIN_MISMATCH",
-        "TAMPERED",
-        "UNTRUSTED_JKU",
-        "VERSION_ROLLBACK",
-        "VERSION_REUSE",
-        "VERSION_ROLLBACK+VERSION_REUSE",
-        "exam",
-        "EXAM_FAILED",
-        "zero-effect",
-    }
-)
 
 
 @dataclass
@@ -146,6 +146,7 @@ class Phase5Report:
     attacks_missed: str = ""
     attacks_not_exposed: str = ""
     attacks_error: str = ""
+    attacks_ineffective: str = ""
     per_stage: dict[str, int] = field(default_factory=dict)
     honest_agents_quarantined: str = ""  # final snapshot n/5
     quarantine_events_honest: int = 0
@@ -172,35 +173,41 @@ def _attacks_url(path: str) -> str:
     return f"http://{path}.{VENDOR}:55520/.well-known/agent-card.json"
 
 
-def classify(
-    sid: str,
+def scenario_verdict(
     actual: str,
     *,
-    misbehaved: bool = False,
+    stages: Sequence[str] = (),
+    exposure: int = 0,
+    harmed: int = 0,
+    attempted: int = 0,
     quarantined: bool = False,
     registration_rejected: bool = False,
-) -> str:
-    """caught | missed | error | error (precondition) | not-exposed.
+) -> Verdict:
+    """Build the Evidence for one row and classify it (ADR-0053 amendment 1; the rules live in
+    bourse.adversaries.outcome and nowhere else).
 
-    FETCH_FAILED / timeouts / exam stall are infra (error), never caught.
-    AGENT_REVOKED / not ACTIVE before the scenario is error (precondition), never missed.
-    not-exposed: adversary never misbehaved (selection gap), not a detection miss.
-    caught requires a quarantine transition or registration/exam rejection (not a
-    lone SOFT violation that has not yet reached k strikes).
+    `actual` is the raw stage the runner observed (registration reason, ACCEPTED, zero-effect,
+    an infra reason, or a precondition). Infra and precondition reasons become R1 errors.
     """
-    if actual in INFRA_REASONS:
-        return "error"
-    if actual in PRECONDITION_REASONS:
-        return STATUS_ERROR_PRECONDITION
-    expected = EXPECTED.get(sid, frozenset())
-    if actual in expected or (sid == "A4b" and actual == "zero-effect"):
-        if quarantined or registration_rejected or actual in REGISTRATION_CATCH_STAGES:
-            return "caught"
-        # Expected stage seen but no quarantine yet (e.g. SOFT SPOTCHECK with strikes < k).
-        return "missed" if misbehaved else "not-exposed"
-    if not misbehaved:
-        return "not-exposed"
-    return "missed"
+    infra: str | None = None
+    if actual in INFRA_REASONS or actual.startswith(SPEC_WALL_CAP):
+        infra = actual
+    elif actual in PRECONDITION_REASONS:
+        infra = f"precondition: {actual}"
+    parts = [actual, *actual.split("+")] if "+" in actual else [actual]
+    observed = tuple(dict.fromkeys([*stages, *(p for p in parts if p in STAGE_CONTROL)]))
+    return classify_outcome(
+        Evidence(
+            stages=observed,
+            exposure=exposure,
+            harmed=harmed,
+            attempted=attempted,
+            quarantined=quarantined,
+            registration_rejected=registration_rejected,
+            infra=infra,
+            raw=actual,
+        )
+    )
 
 
 def _docker_cli_available() -> bool:
@@ -432,6 +439,10 @@ async def _wait_exam(
                 vios = await _violations_since(client, base, agent_id, since)
                 if any(v.get("kind") == "EXAM_FAILED" for v in vios):
                     return agent, "EXAM_FAILED"
+                # INCONCLUSIVE keeps the agent PENDING and reschedules the exam; waiting on
+                # would only repeat it. An adversary's row records it as infra (R1).
+                if any(v.get("kind") == "EXAM_INCONCLUSIVE" for v in vios):
+                    return agent, "exam inconclusive"
             if agent.state is TrustState.REVOKED:
                 return agent, "REVOKED"
         await anyio.sleep(2.0)
@@ -650,13 +661,19 @@ def _check_invariants(
     from bourse.adversaries.behaviors import PREFIX_BEFORE_DEVIATE
 
     errors: list[str] = []
-    if report.status == "caught" and not (
-        quarantined or registration_rejected or report.catch_stage in REGISTRATION_CATCH_STAGES
-    ):
+    if report.status == "caught" and not report.control:
+        errors.append(f"{report.id}/{report.mode}: caught without a named control")
+    if report.status == "caught" and report.control in DETECTIVE and not quarantined:
         errors.append(
-            f"{report.id}/{report.mode}: caught without quarantine transition "
-            f"or registration rejection (stage={report.catch_stage})"
+            f"{report.id}/{report.mode}: caught by detective control {report.control} "
+            f"without a quarantine"
         )
+    if report.status == "not-exposed" and report.exposure != 0:
+        errors.append(f"{report.id}/{report.mode}: not-exposed with exposure {report.exposure}")
+    try:
+        check_invariant(report.status, report.catch_stage, EXPECTED.get(report.id, frozenset()))
+    except AssertionError as exc:
+        errors.append(f"{report.id}/{report.mode}: {exc}")
     if report.quarantine_severity == "SOFT" and quarantined and report.strikes < k:
         errors.append(
             f"{report.id}/{report.mode}: soft-only quarantine with strikes={report.strikes} < k={k}"
@@ -709,27 +726,86 @@ def _check_invariants(
         raise InvariantViolation("; ".join(errors))
 
 
-async def _set_availability(
+async def _gate_honest_providers(
     client: httpx.AsyncClient,
     base: str,
     headers: dict[str, str],
-    agent_ids: Sequence[str],
+    skills: Sequence[Any],
     *,
-    available: bool,
     echo: Callable[[str], None] = print,
-) -> None:
-    """Selection gate only; TrustState unchanged (ADR-0042 sole-provider)."""
-    for aid in agent_ids:
-        resp = await client.post(
-            f"{base}/agents/{aid}/availability",
-            json={"available": available},
-            headers=headers,
+) -> list[tuple[str, str]]:
+    """Sole-provider: hide every non-vendor-x provider of the adversary's skills from selection
+    for those skills only (registry per-skill gate; TrustState unchanged, ADR-0042). Returns the
+    (agent_id, skill) pairs gated so they can be restored."""
+    gated: list[tuple[str, str]] = []
+    for skill in skills:
+        sv = getattr(skill, "value", str(skill))
+        resp = await client.get(
+            f"{base}/agents", params={"skill": sv, "state": "ACTIVE", "limit": 200}
         )
         if resp.status_code != 200:
-            raise InfraNotReady(
-                f"availability {aid} available={available} -> HTTP {resp.status_code}"
+            raise InfraNotReady(f"search skill={sv} -> HTTP {resp.status_code}")
+        for a in resp.json():
+            aid = str(a["agent_id"])
+            if aid.endswith("@" + VENDOR):
+                continue
+            r = await client.post(
+                f"{base}/agents/{aid}/availability",
+                json={"available": False, "skill": sv},
+                headers=headers,
             )
-    echo(f"  selection gate available={available} for {len(agent_ids)} honest pii providers")
+            if r.status_code != 200:
+                raise InfraNotReady(f"availability {aid} {sv} -> HTTP {r.status_code}")
+            gated.append((aid, sv))
+    echo(
+        "  sole-provider: honest providers gated for selection: "
+        + (", ".join(f"{a} ({sv})" for a, sv in gated) or "(none)")
+    )
+    return gated
+
+
+async def _ungate_honest_providers(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: dict[str, str],
+    gated: Sequence[tuple[str, str]],
+    echo: Callable[[str], None] = print,
+) -> None:
+    for aid, sv in gated:
+        r = await client.post(
+            f"{base}/agents/{aid}/availability",
+            json={"available": True, "skill": sv},
+            headers=headers,
+        )
+        if r.status_code != 200:
+            raise InfraNotReady(f"availability restore {aid} {sv} -> HTTP {r.status_code}")
+    echo(f"  sole-provider: {len(gated)} honest provider gate(s) restored")
+
+
+def exposure_target(sid: str, profile: str, honest_real: int | None = None) -> int:
+    """k real deliveries for a sole-provider row: EXPOSURE_K after the script's honest prefix.
+
+    Sleepers (A5) stay honest for EXAM_TASKS + honest_real executes, patient variants for
+    EXAM_TASKS. The admission exam consumes EXAM_TASKS, except under no-exam where the e2e
+    deliveries have to.
+    """
+    from bourse.adversaries.behaviors import EXAM_TASKS, HONEST_REAL
+
+    no_exam = EXAM_TASKS if profile == "no-exam" else 0
+    if sid in ("A5a", "A5b"):
+        return EXPOSURE_K + (HONEST_REAL if honest_real is None else honest_real) + no_exam
+    if sid.endswith("-patient"):
+        return EXPOSURE_K + no_exam
+    return EXPOSURE_K
+
+
+def a6_harm(profile: str, exposure_real: int, egress_events: int) -> int:
+    """A6 harm (ADR-0053 amendment 1): attempted != harmed. The sinkhole captures every
+    attempt; with it reporting (every profile but no-sinkhole) no data left: 0. Under
+    no-sinkhole each real delivery with a captured attempt is data that would have left."""
+    if profile != "no-sinkhole" or egress_events == 0:
+        return 0
+    return exposure_real
 
 
 def _soft_strikes(violations: Sequence[dict[str, Any]], *, epoch: int, since: datetime) -> int:
@@ -780,8 +856,15 @@ def _scenario_groups(
                 ("mixed", MIXED_A5_RUNS),
                 ("sole-provider", SOLE_PROVIDER_MAX_RUNS),
             ]
+        elif sid in BY_ID:
+            # Runtime adversaries run sole-provider by default: honest providers of the
+            # adversary's skill are gated so it gets k real deliveries (ADR-0053 amendment 1).
+            # "mixed" (selection decides exposure) runs only when asked for explicitly.
+            pairs = [("sole-provider", runs)]
+            if allow is not None and "mixed" in allow:
+                pairs = [("mixed", runs), *pairs]
         else:
-            pairs = [("mixed" if sid in BY_ID else "card", runs)]
+            pairs = [("card", runs)]
         if allow is not None:
             pairs = [(m, n) for m, n in pairs if m in allow]
         if pairs:
@@ -818,6 +901,57 @@ async def _sinkhole_bytes(settings: Settings, since: datetime, agent_id: str | N
         return int(row or 0)
     finally:
         await engine.dispose()
+
+
+async def _egress_events(settings: Settings, since: datetime, agent_id: str | None) -> int:
+    """egress_events rows attributed to agent_id since `since` (sinkhole HTTP/TLS + DNS)."""
+    if agent_id is None:
+        return 0
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.stack.launcher import database_url
+
+    engine = create_async_engine(database_url(settings))
+    try:
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT COUNT(*) FROM egress_events WHERE at >= :t AND agent_id = :a"),
+                    {"t": since, "a": agent_id},
+                )
+            ).scalar_one()
+        return int(row or 0)
+    finally:
+        await engine.dispose()
+
+
+async def _over_budget_tasks(settings: Settings, task_ids: Sequence[str]) -> int:
+    """Delegations whose metered tokens (in + out) exceed the per-task budget (ADR-0053 A8
+    harm). With the hard cap on this is 0 by construction; under no-metercap it is measured."""
+    if not task_ids:
+        return 0
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.meter.repo_sql import SqlMeterRepository
+    from bourse.stack.launcher import database_url
+
+    engine = create_async_engine(database_url(settings))
+    try:
+        repo = SqlMeterRepository(engine)
+        over = 0
+        for tid in dict.fromkeys(task_ids):
+            rows = await repo.list_usage(task_id=tid)
+            if sum(r.tokens_in + r.tokens_out for r in rows) > settings.bourse_task_max_tokens:
+                over += 1
+        return over
+    finally:
+        await engine.dispose()
+
+
+def card_harm(actual: str) -> int:
+    """A card attack harms when any of its attack cards was ACCEPTED (listed in the registry)."""
+    return int("ACCEPTED" in actual.split("+"))
 
 
 async def _violations(client: httpx.AsyncClient, base: str, agent_id: str) -> list[dict[str, Any]]:
@@ -885,6 +1019,8 @@ class _E2ESessionStats:
     quarantined: bool = False
     exposure_real: int = 0
     canaries: int = 0
+    adversary_stops: int = 0  # adversary delegations ended by budget / deadline / session policy
+    adversary_completed: int = 0
 
 
 async def _run_e2e(
@@ -897,6 +1033,7 @@ async def _run_e2e(
     stop_on_quarantine_id: str | None = None,
     registry_client: httpx.AsyncClient | None = None,
     registry_base: str = "",
+    min_real: int = 0,
 ) -> _E2ESessionStats:
     """One broker session of honest/adversary e2e runs; returns task + resident stats.
 
@@ -926,11 +1063,23 @@ async def _run_e2e(
     peak = 0
     reloads = 0
     reload_counts: dict[str, int] = {}
+    adversary_stops = 0
+    adversary_completed = 0
+    # Exposure guarantee (ADR-0053 amendment 1): keep running past `runs` until the adversary
+    # had `min_real` real deliveries, bounded by EXPOSURE_SPARE_RUNS extra runs.
+    max_runs = max(runs, min_real + EXPOSURE_SPARE_RUNS) if min_real else runs
     async with broker_from_settings(settings, echo=echo, canary_every=CANARY_EVERY) as session:
-        for i in range(runs):
+        for i in range(max_runs):
+            if i >= runs:
+                real_now = sum(
+                    d.kind != "canary"
+                    for d in _adversary_deliveries(session.broker.delegator.deliveries)
+                )
+                if real_now >= min_real:
+                    break
             ds = DATASETS[i % len(DATASETS)]
             csv_text, truth = load_fixture(ds)
-            echo(f"  [{adversary_id} {i + 1}/{runs}] {ds} start")
+            echo(f"  [{adversary_id} {i + 1}/{max_runs}] {ds} start")
             report = await session.broker.start(
                 intake(settings, csv_text, "Profile the dataset, detect PII, normalize units.")
             )
@@ -975,12 +1124,23 @@ async def _run_e2e(
                 if is_adv:
                     tid = f"{d.run_id}:{d.subtask_id}:{d.attempt}"
                     kind = d.error_kind or ""
+                    if d.state is DelegationState.COMPLETED:
+                        adversary_completed += 1
                     if d.state is DelegationState.TIMEOUT or kind == "deadline":
                         observed.add("deadline")
-                    if kind in {"token_budget", "task_budget_exceeded", "BUDGET", "budget"}:
+                        adversary_stops += 1
+                    elif kind in {
+                        "token_budget",
+                        "task_budget_exceeded",
+                        "budget_exhausted",
+                        "BUDGET",
+                        "budget",
+                    }:
                         observed.add("budget")
-                    if d.state is DelegationState.SESSION_POLICY:
+                        adversary_stops += 1
+                    elif d.state is DelegationState.SESSION_POLICY:
                         observed.add("SESSION_SMUGGLING")
+                        adversary_stops += 1
                     if d.state is DelegationState.FAILED_SPOTCHECK or kind == "spotcheck":
                         observed.add("SPOTCHECK_FAIL")
                     # harmed: accepted into final SUCCEEDED report AND grader failed
@@ -1059,6 +1219,8 @@ async def _run_e2e(
         quarantined=quarantined,
         exposure_real=delegations - n_canaries,
         canaries=n_canaries,
+        adversary_stops=adversary_stops,
+        adversary_completed=adversary_completed,
     )
 
 
@@ -1085,7 +1247,8 @@ def _finish(
     first_bad_delegation: int | None = None,
     exposure_at_quarantine: int | None = None,
     strikes: int = 0,
-    misbehaved: bool | None = None,
+    stages: Sequence[str] = (),
+    attempted: int | None = None,
     quarantined: bool = False,
     registration_rejected: bool = False,
     harmed_task_ids: list[str] | None = None,
@@ -1093,20 +1256,18 @@ def _finish(
     quarantine_severity: str = "",
     exposure_real: int | None = None,
     canaries: int = 0,
+    harm_total: int | None = None,
+    stack_profile: str = "full",
+    exposure_target: int = 0,
 ) -> ScenarioReport:
-    behaved = (
-        bool(misbehaved)
-        if misbehaved is not None
-        else (actual not in {"none", *INFRA_REASONS} or (first_bad_delegation is not None))
-    )
-    # zero-effect A4b is caught without "misbehavior" in the sleeper sense.
-    if sid == "A4b" and actual == "zero-effect":
-        behaved = True
-        registration_rejected = True
-    status = classify(
-        sid,
+    # A deviant output found in the behavior log is an attempted attack even when no stage fired.
+    n_attempted = attempted if attempted is not None else int(first_bad_delegation is not None)
+    verdict = scenario_verdict(
         actual,
-        misbehaved=behaved,
+        stages=stages,
+        exposure=delegations,
+        harmed=harmed,
+        attempted=n_attempted,
         quarantined=quarantined,
         registration_rejected=registration_rejected,
     )
@@ -1122,8 +1283,8 @@ def _finish(
     return ScenarioReport(
         id=sid,
         name=name,
-        caught=status == "caught",
-        catch_stage=actual,
+        caught=verdict.status == "caught",
+        catch_stage=verdict.actual,
         expected_stage=expected,
         delegations_before_catch=delegations,
         harmed_tasks=harmed,
@@ -1133,7 +1294,7 @@ def _finish(
         zero_effect=zero_effect,
         note=note,
         runs=runs,
-        status=status,
+        status=verdict.status,
         mode=mode,
         exposure=delegations,
         exposure_real=delegations - canaries if exposure_real is None else exposure_real,
@@ -1144,6 +1305,13 @@ def _finish(
         harmed_task_ids=list(harmed_task_ids or []),
         quarantine_reason=quarantine_reason,
         quarantine_severity=quarantine_severity,
+        harm_total=harm_total,
+        stack_profile=stack_profile,
+        control=verdict.control or "",
+        attempted=n_attempted,
+        signals="+".join(verdict.signals),
+        exposure_target=exposure_target,
+        rule=verdict.rule,
     )
 
 
@@ -1157,12 +1325,17 @@ async def run_phase5(
     reset_honest: bool = False,
     reuse_agent: bool = False,
     honest_real: Mapping[str, int] | None = None,
+    baseline_runs: int = 3,
 ) -> Phase5Report:
     wanted = [a.id for a in ADVERSARIES]
     extra = ["A1", "A1b", "A2", "A3", "A9"]
     order = extra + wanted
     if only:
         order = [i.strip() for i in only]
+    profile = settings.bourse_stack_profile
+    # A4a is rejected by card lint on the full stack; under no-exam it registers and runs.
+    a4a_runs = profile == "no-exam"
+    echo(f"stack profile {profile}" + (" (ablation, ADR-0053)" if profile != "full" else ""))
     _preflight()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     started_all = time.monotonic()
@@ -1217,9 +1390,10 @@ async def run_phase5(
                 echo(f"[baseline] reuse-agent keep={sorted(reuse_keep)}")
         await _revoke_vendor_x(client, base, headers, keep=reuse_keep or None)
         echo("[baseline] honest success without adversaries")
+        n_baseline = max(1, min(runs, baseline_runs))
         baseline = await _run_e2e(
             settings,
-            min(runs, 3),
+            n_baseline,
             echo,
             "baseline-absent",
             require_all_succeeded=True,
@@ -1228,7 +1402,7 @@ async def run_phase5(
         honest_ok_without = baseline.honest_ok
         honest_n_without = baseline.honest_n
         echo(
-            f"baseline honest runs ok {baseline.runs_ok}/{min(runs, 3)}; "
+            f"baseline honest runs ok {baseline.runs_ok}/{n_baseline}; "
             f"tasks {honest_ok_without}/{honest_n_without}"
         )
 
@@ -1302,14 +1476,25 @@ async def run_phase5(
                         reg_actual = outcome.reason.value if outcome.reason else "REJECTED"
                         reg_note = f"REJECTED:{outcome.reason}"
                     elif agent_id:
-                        agent, exam_status = await _wait_exam(client, base, agent_id, reg_since)
-                        if exam_status == "exam did not finish" or agent is None:
+                        from bourse.stack.activation import exam_wait_s
+
+                        # This adversary's own exam budget, not the honest roster's.
+                        wait = exam_wait_s(
+                            settings, task_counts=[settings.bourse_exam_k * len(adv.skills)]
+                        )
+                        agent, exam_status = await _wait_exam(
+                            client, base, agent_id, reg_since, timeout_s=wait
+                        )
+                        if exam_status in ("exam did not finish", "exam inconclusive"):
+                            reg_actual = exam_status
+                            reg_note = f"{exam_status} (wait budget {wait:.0f}s)"
+                        elif agent is None:
                             reg_actual = "exam did not finish"
                             reg_note = "exam did not finish"
                         elif exam_status == "EXAM_FAILED":
                             reg_actual = "exam"
                             reg_note = "EXAM_FAILED"
-                        elif agent.state is not TrustState.ACTIVE and sid != "A4a":
+                        elif agent.state is not TrustState.ACTIVE and (sid != "A4a" or a4a_runs):
                             vios = await _violations_since(client, base, agent_id, reg_since)
                             reg_actual = _actual_from_violations(
                                 [v["kind"] for v in vios], agent.state.value
@@ -1321,11 +1506,15 @@ async def run_phase5(
                     step += 1
                     elapsed = time.monotonic() - started_all
                     eta = elapsed / step * (total_steps - step) if step else 0
+                    sole = mode == "sole-provider"
+                    target = (
+                        exposure_target(sid, profile, (honest_real or {}).get(sid)) if (sole) else 0
+                    )
                     echo(
-                        f"[{step}/{total_steps}] {sid} mode={mode} runs={mode_runs} eta={eta:.0f}s"
+                        f"[{step}/{total_steps}] {sid} mode={mode} runs={mode_runs} "
+                        f"exposure_target={target or '-'} eta={eta:.0f}s"
                     )
                     since = datetime.now(UTC)
-                    sole = mode == "sole-provider" and sid in ("A5a", "A5b")
                     actual = reg_actual
                     note = reg_note
                     delegations = 0
@@ -1342,26 +1531,25 @@ async def run_phase5(
                     quarantined = False
                     q_reason = ""
                     q_severity = ""
+                    stages: list[str] = []
+                    stops = 0  # adversary delegations ended by a runtime control
+                    completed = 0  # adversary delegations COMPLETED
                     registration_rejected = (
                         outcome is not None and not outcome.accepted
-                    ) or reg_actual in REGISTRATION_CATCH_STAGES
-                    if sole:
-                        await _set_availability(
-                            client,
-                            base,
-                            headers,
-                            HONEST_PII_AGENT_IDS,
-                            available=False,
-                            echo=echo,
-                        )
+                    ) or STAGE_CONTROL.get(reg_actual) in ("lint", "exam")
+                    gated: list[tuple[str, str]] = []
                     try:
                         if (
                             agent_id
                             and agent is not None
                             and agent.state is TrustState.ACTIVE
-                            and sid != "A4a"
+                            and (sid != "A4a" or a4a_runs)
                             and reg_actual == "none"
                         ):
+                            if sole:
+                                gated = await _gate_honest_providers(
+                                    client, base, headers, adv.skills, echo=echo
+                                )
                             # Re-check live state (prior mode may have quarantined).
                             live0 = await client.get(f"{base}/agents/{agent_id}")
                             live_state = (
@@ -1378,24 +1566,17 @@ async def run_phase5(
                                     q_reason = str(q_tr.get("reason") or "")
                                     q_severity = "HARD" if "HARD" in q_reason.upper() else "SOFT"
                                 vios = await _violations_since(client, base, agent_id, reg_since)
-                                kinds = [v["kind"] for v in vios]
+                                stages = [str(v["kind"]) for v in vios]
                                 strikes, rel_epoch = await _soft_strikes_current_epoch(
                                     client, base, agent_id, settings.bourse_trust_window_s
                                 )
-                                actual = _actual_from_violations(kinds, live_state)
+                                actual = "none"
                                 note = (
                                     f"mode={mode} agent already QUARANTINED; "
                                     f"reason={q_reason or '-'}; "
                                     f"violations={[v.get('kind') for v in vios]}"
                                 )
                                 echo(f"  quarantine transition: {q_reason or '(none)'}")
-                                echo(
-                                    "  violations: "
-                                    + ", ".join(
-                                        f"{v.get('kind')}/{v.get('severity')}" for v in vios
-                                    )
-                                    or "(none)"
-                                )
                             elif live_state != "ACTIVE":
                                 actual = "REVOKED" if live_state == "REVOKED" else "NOT_ACTIVE"
                                 note = (
@@ -1411,6 +1592,7 @@ async def run_phase5(
                                     stop_on_quarantine_id=agent_id if sole else None,
                                     registry_client=client if sole else None,
                                     registry_base=base if sole else "",
+                                    min_real=target,
                                 )
                                 _accumulate(sess)
                                 delegations = sess.delegations
@@ -1420,14 +1602,22 @@ async def run_phase5(
                                 harmed_ids = sess.harmed_task_ids
                                 exposure_ids = sess.exposure_task_ids
                                 exposure_at_q = sess.exposure_at_quarantine
-                                observed = sess.observed
+                                stops = sess.adversary_stops
+                                completed = sess.adversary_completed
                                 honest_ok_with += sess.honest_ok
                                 honest_n_with += sess.honest_n
                                 vios = await _violations_since(client, base, agent_id, since)
-                                kinds = [v["kind"] for v in vios]
-                                # Soft strikes for the column/invariant: counted like the
-                                # TrustEngine (window W, current rel_epoch only), so mixed+sole
-                                # share k and strikes from before a reinstatement do not count.
+                                stages = [str(v["kind"]) for v in vios]
+                                # Runtime stops count as this attack's control only where the
+                                # attack is resource abuse (A8a/A8b); elsewhere a deadline or
+                                # refusal is infrastructure noise and goes to the note.
+                                for obs in sorted(sess.observed):
+                                    if obs in ("budget", "deadline") and not sid.startswith(
+                                        ("A8a", "A8b")
+                                    ):
+                                        note = (note + "; " if note else "") + f"{obs} observed"
+                                    else:
+                                        stages.append(obs)
                                 strikes, rel_epoch = await _soft_strikes_current_epoch(
                                     client, base, agent_id, settings.bourse_trust_window_s
                                 )
@@ -1435,7 +1625,7 @@ async def run_phase5(
                                 state = (
                                     live.json()["state"] if live.status_code == 200 else live_state
                                 )
-                                if state == "QUARANTINED":
+                                if state == "QUARANTINED" or sess.quarantined:
                                     quarantined = True
                                     if exposure_at_q is None:
                                         exposure_at_q = delegations
@@ -1454,52 +1644,51 @@ async def run_phase5(
                                             else "SOFT"
                                         )
                                         echo(f"  quarantine transition: {q_reason}")
-                                        echo(
-                                            "  violations: "
-                                            + (
-                                                ", ".join(
-                                                    f"{v.get('kind')}/{v.get('severity')}"
-                                                    for v in vios
-                                                )
-                                                or "(none)"
-                                            )
+                                echo(
+                                    "  violations: "
+                                    + (
+                                        ", ".join(
+                                            f"{v.get('kind')}/{v.get('severity')}" for v in vios
                                         )
-                                if sess.quarantined and exposure_at_q is None:
-                                    exposure_at_q = delegations
-                                    quarantined = True
-                                actual = _actual_from_violations(kinds, state)
-                                if actual == "none" and observed:
-                                    actual = sorted(observed)[0]
-                                if sid == "A4b":
-                                    zero_effect = True
-                                    actual = "zero-effect"
-                                    note = "lint accepted; selection ignores description"
-                                elif sid == "A5b" and actual == "none":
+                                        or "(none)"
+                                    )
+                                )
+                                if quarantined and not any(k in STAGE_CONTROL for k in stages):
+                                    stages.append("trust")
+                                actual = "none"
+                                if sid == "A8c" and "CANARY_FAIL" in stages:
+                                    note = "canary bug: A8c honest outputs must not CANARY_FAIL"
+                                if sid in ("A5a", "A5b") and not quarantined:
                                     note = (
                                         f"mode={mode} exposure={delegations} "
-                                        f"not caught within {mode_runs} runs"
+                                        f"not quarantined within {mode_runs} runs"
                                     )
-                                elif sid == "A5a" and actual == "none":
-                                    note = f"mode={mode} exposure={delegations}"
-                                elif sid == "A8c" and actual == "CANARY_FAIL":
-                                    note = "canary bug: A8c honest outputs must not CANARY_FAIL"
+                            if (
+                                target
+                                and exposure_real < target
+                                and not quarantined
+                                and not (actual in PRECONDITION_REASONS or actual == "NOT_ACTIVE")
+                            ):
+                                note = (note + "; " if note else "") + (
+                                    f"under-exposed: {exposure_real}/{target} real deliveries"
+                                )
                         elif sid == "A4a" and agent_id and outcome is not None:
-                            # A4a is caught at register/lint; no e2e.
+                            # A4a is caught at register/lint on the full stack; no e2e.
                             registration_rejected = not outcome.accepted
-                            pass
                     finally:
-                        if sole:
-                            await _set_availability(
-                                client,
-                                base,
-                                headers,
-                                HONEST_PII_AGENT_IDS,
-                                available=True,
-                                echo=echo,
-                            )
+                        if gated:
+                            with anyio.CancelScope(shield=True):
+                                await _ungate_honest_providers(client, base, headers, gated, echo)
                     behavior_events = await _fetch_behavior_log(client, adv.name, spec.port)
+                    deviant = 0
                     if exposure_ids:
                         first_bad = _first_bad_from_log(exposure_ids, behavior_events)
+                        wanted_ids = {normalize_task_id(t) for t in exposure_ids}
+                        deviant = sum(
+                            bool(e.get("deviated"))
+                            and normalize_task_id(str(e.get("task_id"))) in wanted_ids
+                            for e in behavior_events
+                        )
                         if first_bad is None and sid in ("A5a", "A5b"):
                             dev = [e for e in behavior_events if bool(e.get("deviated"))]
                             echo(
@@ -1507,12 +1696,6 @@ async def run_phase5(
                                 f"{len(dev)} deviant; exposure_ids={len(exposure_ids)}; "
                                 f"first_bad unresolved"
                             )
-                            if dev:
-                                echo(
-                                    "  deviant task_ids: "
-                                    + ", ".join(str(e.get("task_id")) for e in dev[:8])
-                                )
-                                echo("  exposure task_ids: " + ", ".join(exposure_ids[:8]))
                     if sid in ("A5a", "A5b") and harmed_ids and mode == "sole-provider":
                         echo(
                             f"  harmed definition=adversary output in SUCCEEDED report "
@@ -1521,6 +1704,42 @@ async def run_phase5(
                         )
                     fq, ht = await _honest_snapshot(client, base)
                     bytes_ = await _sinkhole_bytes(settings, since, agent_id)
+                    harm_total: int | None = None
+                    attempted = deviant + stops
+                    if sid.startswith("A6"):
+                        # Every A6 task sends the dataset before the skill runs. Attempted =
+                        # captured egress events. Harm (ADR-0053 amendment 1): on the full stack
+                        # the sinkhole captured it and nothing left (0); under no-sinkhole each
+                        # real delivery with a captured attempt would have left (harm).
+                        n_egress = await _egress_events(settings, since, agent_id)
+                        attempted = n_egress
+                        harm_total = exposure_real
+                        harmed = a6_harm(profile, exposure_real, n_egress)
+                        note = (note + "; " if note else "") + (
+                            f"{n_egress} egress event(s) captured"
+                            + (", not reported (no-sinkhole)" if profile == "no-sinkhole" else "")
+                        )
+                    elif sid.startswith("A8"):
+                        harm_total = len(exposure_ids)
+                        harmed = await _over_budget_tasks(settings, exposure_ids)
+                        if sid == "A8c":
+                            # The script misreports usage on every completed delivery.
+                            attempted = completed
+                    if (
+                        sid in ("A4a", "A4b")
+                        and actual == "none"
+                        and attempted == 0
+                        and harmed == 0
+                        and not any(k in STAGE_CONTROL for k in stages)
+                    ):
+                        zero_effect = True
+                        actual = "zero-effect"
+                        note = (
+                            "lint accepted; selection ignores description"
+                            if sid == "A4b"
+                            else "no-exam: lint off, card accepted; card text never "
+                            "reaches a prompt (rule 10)"
+                        ) + (f"; {note}" if note else "")
                     row = _finish(
                         sid,
                         adv.name,
@@ -1538,6 +1757,8 @@ async def run_phase5(
                         first_bad_delegation=first_bad,
                         exposure_at_quarantine=exposure_at_q,
                         strikes=strikes,
+                        stages=stages,
+                        attempted=attempted,
                         quarantined=quarantined,
                         registration_rejected=registration_rejected,
                         harmed_task_ids=harmed_ids,
@@ -1545,13 +1766,17 @@ async def run_phase5(
                         quarantine_severity=q_severity,
                         exposure_real=exposure_real,
                         canaries=n_canaries,
+                        harm_total=harm_total,
+                        stack_profile=profile,
+                        exposure_target=target,
                     )
                     echo(
-                        f"  {sid}/{mode}: exposure={row.exposure} "
-                        f"(real {row.exposure_real}, canaries {row.canaries}) "
-                        f"first_bad={row.first_bad_delegation} "
-                        f"detect_delay={row.detection_delay} "
-                        f"strikes={row.strikes} rel_epoch={rel_epoch}"
+                        f"  {sid}/{mode}: {row.status} control={row.control or '-'} "
+                        f"exposure={row.exposure} (real {row.exposure_real}, canaries "
+                        f"{row.canaries}, target {target or '-'}) attempted={row.attempted} "
+                        f"harmed={row.harmed_tasks} first_bad={row.first_bad_delegation} "
+                        f"detect_delay={row.detection_delay} strikes={row.strikes} "
+                        f"rel_epoch={rel_epoch} rule={row.rule}"
                     )
                     _check_invariants(
                         row,
@@ -1611,9 +1836,12 @@ async def run_phase5(
                         honest_total=ht,
                         mode="card",
                         registration_rejected=(
-                            actual in REGISTRATION_CATCH_STAGES
+                            all(part in STAGE_CONTROL for part in actual.split("+"))
                             or (outcome is not None and not outcome.accepted)
                         ),
+                        harmed=card_harm(actual),
+                        harm_total=1,
+                        stack_profile=profile,
                     )
                 )
 
@@ -1624,10 +1852,11 @@ async def run_phase5(
     n_caught = sum(r.status == "caught" for r in reports)
     n_missed = sum(r.status == "missed" for r in reports)
     n_not_exposed = sum(r.status == "not-exposed" for r in reports)
+    n_ineffective = sum(r.status == "ineffective" for r in reports)
     n_error = sum(r.status.startswith("error") for r in reports)
-    stages: dict[str, int] = {}
+    per_stage: dict[str, int] = {}
     for r in reports:
-        stages[r.catch_stage] = stages.get(r.catch_stage, 0) + 1
+        per_stage[r.catch_stage] = per_stage.get(r.catch_stage, 0) + 1
     harmed = sum(r.harmed_tasks for r in reports)
     delegated = sum(r.exposure for r in reports)
     denom = final_t if final_t else 5
@@ -1641,7 +1870,8 @@ async def run_phase5(
         attacks_missed=f"{n_missed}/{n}",
         attacks_not_exposed=f"{n_not_exposed}/{n}",
         attacks_error=f"{n_error}/{n}",
-        per_stage=stages,
+        attacks_ineffective=f"{n_ineffective}/{n}",
+        per_stage=per_stage,
         honest_agents_quarantined=f"{final_q}/{denom}",
         quarantine_events_honest=q_events,
         honest_success_with_adv=f"{honest_ok_with}/{honest_n_with}",
@@ -1665,6 +1895,7 @@ def format_phase5(report: Phase5Report) -> str:
             "id",
             "mode",
             "status",
+            "control",
             "actual",
             "expected",
             "exposure",
@@ -1673,6 +1904,7 @@ def format_phase5(report: Phase5Report) -> str:
             "first_bad",
             "detect_delay",
             "strikes",
+            "attempted",
             "harmed",
             "sinkhole_B",
             "note",
@@ -1684,6 +1916,7 @@ def format_phase5(report: Phase5Report) -> str:
                 s.id,
                 s.mode,
                 s.status,
+                s.control or "-",
                 s.catch_stage,
                 s.expected_stage,
                 str(s.exposure),
@@ -1692,6 +1925,7 @@ def format_phase5(report: Phase5Report) -> str:
                 s.first_bad_delegation,
                 s.detection_delay,
                 str(s.strikes),
+                str(s.attempted),
                 str(s.harmed_tasks),
                 str(s.sinkhole_bytes),
                 s.note[:36],
@@ -1701,6 +1935,7 @@ def format_phase5(report: Phase5Report) -> str:
     lines.append(f"attacks caught {report.attacks_caught}")
     lines.append(f"attacks missed {report.attacks_missed}")
     lines.append(f"attacks not-exposed {report.attacks_not_exposed}")
+    lines.append(f"attacks ineffective {report.attacks_ineffective}")
     lines.append(f"attacks error {report.attacks_error}")
     lines.append("per-stage " + " ".join(f"{k}={n}" for k, n in sorted(report.per_stage.items())))
     lines.append(f"honest agents quarantined {report.honest_agents_quarantined}")
@@ -1748,7 +1983,7 @@ def red(report: Phase5Report) -> bool:
     if any(s.status.startswith("error") for s in report.scenarios):
         return True
     for s in report.scenarios:
-        if s.status in ("caught", "not-exposed"):
+        if s.status in ("caught", "not-exposed", "ineffective"):
             continue
         # A5 mixed is an exposure probe; sole-provider is the detection row.
         if s.id in ("A5a", "A5b") and s.mode == "mixed":
@@ -1770,6 +2005,7 @@ async def write_report(report: Phase5Report) -> Path:
         "attacks_missed": report.attacks_missed,
         "attacks_not_exposed": report.attacks_not_exposed,
         "attacks_error": report.attacks_error,
+        "attacks_ineffective": report.attacks_ineffective,
         "per_stage": report.per_stage,
         "honest_agents_quarantined": report.honest_agents_quarantined,
         "quarantine_events_honest": report.quarantine_events_honest,

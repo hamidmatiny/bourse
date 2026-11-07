@@ -1,0 +1,19 @@
+# Phase 6b dev re-validation (ADR-0053 amendment 1). Not a result.
+# Stack profile no-sinkhole, its adversaries only.
+# Runtime adversaries run sole-provider: honest providers of their skill are gated until k real deliveries (ADR-0053 amendment 1).
+name: dev6b-no-sinkhole
+split: dev
+stack_profile: no-sinkhole
+adversaries:
+- id: A6a
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800
+- id: A6b
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800
+- id: A6c
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800

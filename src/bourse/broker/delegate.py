@@ -28,7 +28,7 @@ from bourse.contracts.broker import (
     SubtaskResult,
     SubtaskStatus,
 )
-from bourse.contracts.metering import TaskBudget
+from bourse.contracts.metering import TaskBudget, TaskBudgetStatus
 from bourse.contracts.registry import AgentRecord
 from bourse.contracts.skills import SkillId
 from bourse.contracts.skills_io import SKILL_IO, DatasetRef, ReportIn
@@ -121,6 +121,14 @@ class MeterBudgetClient:
             f"{self._base}/budgets", json=budget.model_dump(mode="json"), headers=self._auth
         )
         resp.raise_for_status()
+
+    async def status(self, task_id: str) -> TaskBudgetStatus:
+        """Meter evidence for one task (ADR-0049 amendment 2). Raises httpx.HTTPError."""
+        resp = await self._http.get(
+            f"{self._base}/budgets/status", params={"task_id": task_id}, headers=self._auth
+        )
+        resp.raise_for_status()
+        return TaskBudgetStatus.model_validate(resp.json())
 
 
 def build_input(

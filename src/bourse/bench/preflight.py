@@ -7,8 +7,11 @@ container) and `bench launch` (on the host) now check the registry:
   the config has adversary specs;
 - every pii_separation agent is registered and ACTIVE.
 
-On failure they exit non-zero and print each problem. `agent_problems` is pure, so it can be
-tested without a stack.
+Phase 6b (ADR-0053): the config's `stack_profile` must equal the live profile of the
+registry (and of the meter, which `bench run` reaches inside the compose network).
+
+On failure they exit non-zero and print each problem. `agent_problems` and `profile_problems`
+are pure, so they can be tested without a stack.
 """
 
 from collections.abc import Sequence
@@ -60,10 +63,65 @@ def fetch_agents(registry_url: str, timeout_s: float = 10.0) -> list[AgentRecord
         return [AgentRecord.model_validate(a) for a in resp.json()]
 
 
-def check(config: BenchConfig, registry_url: str, expected_honest: int) -> list[str]:
-    """Problems, or [] when the run may start. An unreachable registry is a problem."""
+def fetch_profile(base_url: str, timeout_s: float = 10.0) -> str:
+    with httpx.Client(timeout=timeout_s) as client:
+        resp = client.get(f"{base_url.rstrip('/')}/stack-profile")
+        resp.raise_for_status()
+        profile = resp.json().get("profile")
+        if not isinstance(profile, str):
+            raise ValueError("stack-profile response has no profile")
+        return profile
+
+
+def profile_problems(config: BenchConfig, live: dict[str, str]) -> list[str]:
+    """The config's stack_profile must equal every service's live profile (ADR-0053)."""
+    return [
+        f"{service} runs stack profile {got!r}, config {config.name} needs "
+        f"{config.stack_profile!r} (`uv run bourse stack up --mode compose --stack-profile "
+        f"{config.stack_profile}`)"
+        for service, got in sorted(live.items())
+        if got != config.stack_profile
+    ]
+
+
+def check(
+    config: BenchConfig,
+    registry_url: str,
+    expected_honest: int,
+    meter_url: str | None = None,
+) -> list[str]:
+    """Problems, or [] when the run may start. An unreachable registry (or meter, when given)
+    is a problem."""
     try:
         agents = fetch_agents(registry_url)
+        live = {"registry": fetch_profile(registry_url)}
     except (httpx.HTTPError, ValueError) as exc:
         return [f"registry {registry_url} unreachable: {type(exc).__name__}: {exc}"]
-    return agent_problems(config, agents, expected_honest)
+    if meter_url is not None:
+        try:
+            live["meter"] = fetch_profile(meter_url)
+        except (httpx.HTTPError, ValueError) as exc:
+            return [f"meter {meter_url} unreachable: {type(exc).__name__}: {exc}"]
+    return profile_problems(config, live) + agent_problems(config, agents, expected_honest)
+
+
+def agent_state_line(agents: Sequence[AgentRecord]) -> str:
+    """End-of-run registry snapshot for the morning check: honest agents not ACTIVE are an
+    anomaly (false quarantine); adversary states are listed for the record."""
+    honest = sorted(
+        (a for a in agents if a.vendor_domain != ADVERSARY_VENDOR), key=lambda a: a.agent_id
+    )
+    adv = sorted(
+        (a for a in agents if a.vendor_domain == ADVERSARY_VENDOR), key=lambda a: a.agent_id
+    )
+    bad = [f"{a.agent_id}={a.state.value}" for a in honest if a.state is not TrustState.ACTIVE]
+    active = sum(a.state is TrustState.ACTIVE for a in honest)
+    line = f"honest agents at end: ACTIVE {active}/{len(honest)}; not ACTIVE: " + (
+        ", ".join(bad) or "none"
+    )
+    if adv:
+        counts: dict[str, int] = {}
+        for a in adv:
+            counts[a.state.value] = counts.get(a.state.value, 0) + 1
+        line += "; adversaries " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+    return line

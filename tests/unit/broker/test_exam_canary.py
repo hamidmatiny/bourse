@@ -137,10 +137,11 @@ async def test_exam_fail_stays_pending_and_cooldown(beds: list[BrokerBed]) -> No
     assert record is not None and record.state is TrustState.PENDING
     assert [v.kind for v in await repo.list_violations(agent.agent_id)] == [EXAM_FAILED]
     assert await exam.run(agent.agent_id) is None  # cooldown: nothing sent
-    assert len(bed.executors["x-pii"].requests) == 5
+    # 2 failures > k - pass_n = 1: the exam cannot pass and stops (ADR-0049 amendment, 6b).
+    assert len(bed.executors["x-pii"].requests) == 2
     clock.now += timedelta(seconds=601)
     assert await exam.run(agent.agent_id) is not None
-    assert len(bed.executors["x-pii"].requests) == 10
+    assert len(bed.executors["x-pii"].requests) == 4
 
 
 async def test_exam_infra_contention_retries_then_inconclusive(beds: list[BrokerBed]) -> None:
@@ -179,7 +180,8 @@ async def test_exam_grader_failure_still_exam_failed(beds: list[BrokerBed]) -> N
     result = await runner(bed, Clock(), InMemoryHoneytokenRepository(), cfg).run(agent.agent_id)
     assert result is not None and not result.passed and not result.inconclusive
     assert all(t.outcome == "grader-failed" for t in result.tasks)
-    assert len(bed.executors["x-pii"].requests) == 2  # no INFRA retries
+    # k - pass_n = 0 failures allowed: stops after the first (no INFRA retries either).
+    assert len(bed.executors["x-pii"].requests) == 1
     kinds = [v.kind for v in await bed.registry_service.repo.list_violations(agent.agent_id)]
     assert kinds == [EXAM_FAILED]
 
@@ -229,7 +231,9 @@ async def test_exam_needs_4_of_5_per_skill(beds: list[BrokerBed]) -> None:
     bed = await BrokerBed([agent], activate=False).setup()
     beds.append(bed)
     result = await runner(bed, Clock(), InMemoryHoneytokenRepository()).run(agent.agent_id)
-    assert result is not None and (result.passed, result.n) == (False, 3)
+    # Calls 2 and 4 fail: the 2nd failure (4th task) ends the exam with 2 of 5 passed.
+    assert result is not None and (result.passed, result.n, result.total) == (False, 2, 5)
+    assert calls == 4
 
 
 async def test_registration_starts_exam_without_manual_activation(beds: list[BrokerBed]) -> None:

@@ -1,5 +1,7 @@
 """Postgres usage repository. llm_usage is append-only (trigger in migration 0002)."""
 
+from datetime import datetime
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -42,6 +44,7 @@ llm_usage = Table(
     Column("prompt_eval_duration_ms", Float, nullable=True),
     Column("eval_duration_ms", Float, nullable=True),
     Column("reload", Boolean, nullable=False, server_default="false"),
+    Column("prompt_tokens_est", Integer, nullable=True),
     CheckConstraint("tokens_in >= 0 AND tokens_out >= 0", name="ck_llm_usage_tokens"),
 )
 
@@ -53,6 +56,14 @@ class SqlMeterRepository:
     async def add_usage(self, record: LlmUsageRecord) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(llm_usage.insert().values(**record.model_dump()))
+
+    async def list_usage_since(self, since: datetime) -> list[LlmUsageRecord]:
+        stmt = select(llm_usage).where(llm_usage.c.at >= since).order_by(llm_usage.c.id)
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [
+            LlmUsageRecord.model_validate({k: v for k, v in r.items() if k != "id"}) for r in rows
+        ]
 
     async def list_usage(
         self, agent_id: str | None = None, task_id: str | None = None, run_id: str | None = None

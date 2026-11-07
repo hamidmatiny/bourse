@@ -84,3 +84,25 @@ async def test_usage_rows_append_only(repo: SqlMeterRepository) -> None:
     finally:
         await engine.dispose()
     assert await repo.list_usage() == [row]
+
+
+async def test_prompt_estimate_round_trips(repo: SqlMeterRepository) -> None:
+    """Migration 0012: the meter's prompt estimate is stored next to the measured tokens_in."""
+    row = LlmUsageRecord(
+        agent_id="agent-b",
+        task_id="t-est",
+        provider="ollama",
+        model="m",
+        tokens_in=60,
+        tokens_out=100,
+        wall_ms=1.0,
+        status=200,
+        error_kind=None,
+        at=datetime.now(UTC),
+        prompt_tokens_est=151,
+    )
+    old = row.model_copy(update={"task_id": "t-old", "prompt_tokens_est": None})
+    await repo.add_usage(row)
+    await repo.add_usage(old)
+    assert await repo.list_usage(task_id="t-est") == [row]
+    assert (await repo.list_usage(task_id="t-old"))[0].prompt_tokens_est is None

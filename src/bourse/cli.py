@@ -290,10 +290,13 @@ def registry_serve(
         approver=select_approver(settings, tty=False, prefer_http=True),
         wilson_lb_for=_wilson,
     )
+    profile = settings.bourse_stack_profile
+    if profile != "full":
+        typer.echo(f"STACK PROFILE {profile} (ablation, ADR-0053)")
     service = RegistryService(
         repo,
         client,
-        RegistryPolicy(dev_hosts=settings.dev_hosts),
+        RegistryPolicy.for_profile(profile, settings.dev_hosts),
         strike_k=settings.bourse_trust_strikes,
         strike_window_s=settings.bourse_trust_window_s,
         inline_per_hour=settings.bourse_inline_violations_per_hour,
@@ -374,8 +377,9 @@ def registry_serve(
     app_ = create_app(
         service,
         settings.bourse_admin_token.get_secret_value(),
-        exams,
+        None if profile == "no-exam" else exams,
         rate_per_min=settings.bourse_register_rate_per_min,
+        stack_profile=profile,
     )
     uvicorn.run(app_, host=host or settings.bourse_bind_host, port=port)
 
@@ -412,6 +416,12 @@ def attacks_phase5(
             help="A5a/A5b: reuse ACTIVE registered identity (no re-register); for re-catch",
         ),
     ] = False,
+    baseline_runs: Annotated[
+        int,
+        typer.Option(
+            "--baseline-runs", min=1, help="Honest health-gate e2e runs before the scenarios"
+        ),
+    ] = 3,
 ) -> None:
     """Adversary suite A4-A8 plus A1-A3,A9 over compose card_url (ADR-0042)."""
     from bourse.adversaries.runner import (
@@ -450,6 +460,7 @@ def attacks_phase5(
                 echo=typer.echo,
                 reset_honest=reset_honest,
                 reuse_agent=reuse_agent,
+                baseline_runs=baseline_runs,
             )
         except InvariantViolation as exc:
             typer.echo(f"INVARIANT FAIL: {exc}", err=True)
@@ -547,7 +558,9 @@ def meter_serve(
                 keep_alive=settings.bourse_meter_keep_alive,
             ),
             ollama_base_url=settings.ollama_base_url,
-            require_task_budget=True,
+            # no-metercap (ADR-0053) removes per-task budgets; global caps stay on.
+            require_task_budget=settings.bourse_stack_profile != "no-metercap",
+            stack_profile=settings.bourse_stack_profile,
             max_in_flight=settings.bourse_meter_max_in_flight,
             tokens_per_min=settings.bourse_meter_tokens_per_min,
             max_prompt_tokens=settings.bourse_meter_max_prompt_tokens,
@@ -583,6 +596,13 @@ def stack_up(
             help="After the honest agents are ACTIVE, also start the adversaries profile",
         ),
     ] = False,
+    stack_profile: Annotated[
+        str,
+        typer.Option(
+            "--stack-profile",
+            help="full (default) or an ablation: no-exam, no-cardsig, no-sinkhole, no-metercap",
+        ),
+    ] = "full",
 ) -> None:
     """compose: isolated containers with egress control (ADR-0034); host: local processes.
 
@@ -606,6 +626,12 @@ def stack_up(
         raise typer.BadParameter("mode must be compose or host")
     if with_adversaries and mode != "compose":
         raise typer.BadParameter("--with-adversaries requires --mode compose")
+    from bourse.contracts.bench import STACK_PROFILES
+
+    if stack_profile not in STACK_PROFILES:
+        raise typer.BadParameter(f"--stack-profile must be one of {', '.join(STACK_PROFILES)}")
+    if stack_profile != "full" and mode != "compose":
+        raise typer.BadParameter("--stack-profile requires --mode compose")
     if mode == "compose":
         from bourse.stack.image_freshness import REBUILD_HINT, stale_compose_images
 
@@ -635,8 +661,8 @@ def stack_up(
                 err=True,
             )
             raise typer.Exit(1)
-        written = write_compose_env(settings)
-        typer.echo(f"env files {len(written)} (data/run/env/)")
+        written = write_compose_env(settings, stack_profile)
+        typer.echo(f"env files {len(written)} (data/run/env/); stack profile {stack_profile}")
         # Honest stack only; adversaries start after ACTIVE when --with-adversaries.
         result = compose("up", "-d", "--remove-orphans", check=False)
         typer.echo((result.stdout + result.stderr).strip())
@@ -1011,6 +1037,7 @@ def egress_dns_watch(
     from bourse.broker.delegate import RegistryClient
     from bourse.contracts.trust import ViolationReport
     from bourse.egress.dns_log import DnsLogWatcher
+    from bourse.egress.profile import reporter_for_profile
     from bourse.stack.launcher import admin_token
     from bourse.stack.topology import agent_ids_by_ip, allowlisted_names, ip_identities
     from bourse.trust.repo import SqlEgressRepository
@@ -1033,7 +1060,7 @@ def egress_dns_watch(
                 agent_ips=agent_ids_by_ip(),
                 allow=frozenset(allowlisted_names()),
                 repo=SqlEgressRepository(engine),
-                report=report,
+                report=reporter_for_profile(settings.bourse_stack_profile, report, typer.echo),
             )
             typer.echo(f"dns-watch {log_path}")
             await watcher.follow(Path(log_path))
@@ -1048,6 +1075,7 @@ def egress_sinkhole() -> None:
 
     from bourse.broker.delegate import RegistryClient
     from bourse.contracts.trust import ViolationReport
+    from bourse.egress.profile import reporter_for_profile
     from bourse.egress.sinkhole import Sinkhole
     from bourse.stack.launcher import admin_token
     from bourse.stack.topology import agent_ids_by_ip, ip_identities
@@ -1072,7 +1100,7 @@ def egress_sinkhole() -> None:
                 agent_ips=agent_ids_by_ip(),
                 repo=SqlEgressRepository(engine),
                 tokens=SqlHoneytokenRepository(engine),
-                report=report,
+                report=reporter_for_profile(settings.bourse_stack_profile, report, typer.echo),
             )
             typer.echo(f"sinkhole listening on {ports}")
             await sinkhole.serve(ports, settings.bourse_bind_host)

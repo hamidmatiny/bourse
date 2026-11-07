@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -34,16 +35,33 @@ bench_app.add_typer(split_app, name="split")
 SplitOpt = Annotated[Literal["dev", "test"], typer.Option("--split", help="dev or test")]
 
 
-def _refuse_on_preconditions(cfg: BenchConfig, settings: Settings, who: str) -> None:
-    """Exit 2 with every problem listed if the agents this config needs are not ACTIVE."""
+def _refuse_on_preconditions(
+    cfg: BenchConfig,
+    settings: Settings,
+    who: str,
+    *,
+    meter: bool = False,
+    log_path: Path | None = None,
+) -> None:
+    """Exit 2 with every problem listed if the agents this config needs are not ACTIVE or the
+    live stack profile differs from the config's. `meter`: also ask the meter (inside compose)."""
     from bourse.agents.catalog import specs_from_settings
     from bourse.bench.preflight import check
 
-    problems = check(cfg, settings.bourse_registry_url, len(specs_from_settings(settings)))
+    problems = check(
+        cfg,
+        settings.bourse_registry_url,
+        len(specs_from_settings(settings)),
+        meter_url=settings.bourse_meter_url if meter else None,
+    )
     if problems:
-        typer.echo(f"REFUSED: {who} preconditions failed ({len(problems)}):", err=True)
-        for p in problems:
-            typer.echo(f"  - {p}", err=True)
+        lines = [f"REFUSED: {who} preconditions failed ({len(problems)}):"]
+        lines += [f"  - {p}" for p in problems]
+        for line in lines:
+            typer.echo(line, err=True)
+        if log_path is not None:
+            with log_path.open("a") as log:
+                log.write("".join(line + "\n" for line in lines))
         raise typer.Exit(2)
 
 
@@ -174,7 +192,7 @@ def bench_run(
         _fail("the test split is for --final runs only; tune on dev")
     run_dir = BENCH_DIR / cfg.name
     env = ollama_env(settings.ollama_base_url, settings.ollama_num_parallel)
-    _refuse_on_preconditions(cfg, settings, "bench run")
+    _refuse_on_preconditions(cfg, settings, "bench run", meter=True)
 
     async def go() -> list[str]:
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as http:
@@ -198,6 +216,7 @@ def bench_run(
                 "model digests (pin these in model_digests for --final): "
                 + json.dumps(prov.model_digests)
             )
+            started_at = datetime.now(UTC)
             result = await run_bench(
                 cfg,
                 sessions=session_factory(settings, typer.echo),
@@ -206,14 +225,32 @@ def bench_run(
                 guard=guard,
                 echo=typer.echo,
             )
-            prov = prov.model_copy(update={"manifest_sha256": result.manifest_sha256})
+            prov = prov.model_copy(
+                # stack_profile: preflight checked the live registry + meter equal the config's.
+                update={
+                    "manifest_sha256": result.manifest_sha256,
+                    "stack_profile": cfg.stack_profile,
+                }
+            )
             (result.run_dir / "provenance.json").write_text(prov.model_dump_json(indent=2) + "\n")
             summary = summarize(cfg, result.records, prov, host.load(result.run_dir))
             (result.run_dir / "summary.json").write_text(summary.model_dump_json(indent=2) + "\n")
             typer.echo(
                 f"cells run this invocation {result.ran}; finished before (resume) {result.skipped}"
             )
-            return format_summary(summary) + _all_error_line(result.records, result.ran)
+            est_line = await _estimate_line(settings, started_at, result.run_dir)
+            try:
+                from bourse.bench.preflight import agent_state_line, fetch_agents
+
+                agents_line = agent_state_line(fetch_agents(settings.bourse_registry_url))
+            except (httpx.HTTPError, ValueError) as exc:
+                agents_line = f"honest agents at end: unavailable ({type(exc).__name__})"
+            return [
+                *format_summary(summary),
+                agents_line,
+                est_line,
+                *_all_error_line(result.records, result.ran),
+            ]
 
     try:
         lines = asyncio.run(go())
@@ -227,6 +264,28 @@ def bench_run(
         raise typer.Exit(3)
 
 
+async def _estimate_line(settings: Settings, since: datetime, run_dir: Path) -> str:
+    """Meter prompt estimate vs measured tokens_in for every call since this invocation began
+    (all agents; the stack's DB is wiped by `stack down`, so it is recorded now)."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bourse.meter.repo_sql import SqlMeterRepository
+    from bourse.meter.stats import estimate_check
+
+    try:
+        engine = create_async_engine(settings.bourse_database_url)
+        try:
+            usage = await SqlMeterRepository(engine).list_usage_since(since)
+        finally:
+            await engine.dispose()
+    except Exception as exc:  # recorded as unavailable, never as 0/0
+        return f"meter prompt estimate check unavailable: {type(exc).__name__}"
+    check = estimate_check(usage)
+    path = run_dir / f"estimate-{since.strftime('%Y%m%dT%H%M%SZ')}.json"
+    path.write_text(json.dumps({"since": since.isoformat(), **check.__dict__}, indent=2) + "\n")
+    return check.line()
+
+
 @bench_app.command("launch")
 def bench_launch(
     config: Annotated[Path, typer.Option("--config", help="Bench config YAML (repo-relative)")],
@@ -234,10 +293,18 @@ def bench_launch(
     interval: Annotated[
         float, typer.Option("--interval", help="Seconds between host samples", min=5.0)
     ] = 60.0,
+    allow_battery: Annotated[
+        bool,
+        typer.Option(
+            "--allow-battery", help="Start even on battery, in Low Power Mode or power unknown"
+        ),
+    ] = False,
 ) -> None:
-    """Host side: start `bench run` in the broker container with stdin from /dev/null, its log
-    in data/logs/bench-<name>.log, and sample host conditions (pmset, load) into
-    data/bench/<name>/host.jsonl at start, every --interval s, and at the end."""
+    """Host side: start `bench run` in the broker container under `caffeinate -dimsu`, with
+    stdin from /dev/null, its log in data/logs/bench-<name>.log, and sample host conditions
+    (pmset, load) into data/bench/<name>/host.jsonl at start, every --interval s, and at the end.
+    Refuses (exit 2, reason in the log) on battery or in Low Power Mode unless --allow-battery."""
+    import shutil
     import subprocess
 
     from bourse.stack.compose_guard import in_compose_network
@@ -248,10 +315,30 @@ def bench_launch(
     run_dir = BENCH_DIR / cfg.name
     log_path = Path("data/logs") / f"bench-{cfg.name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    _refuse_on_preconditions(cfg, get_settings(), "bench launch")
+
+    def refuse(lines: list[str]) -> None:
+        with log_path.open("a") as log:
+            for line in lines:
+                log.write(line + "\n")
+                typer.echo(line, err=True)
+        raise typer.Exit(2)
+
+    start = host.sample("start")
+    power = host.power_problems(start)
+    if power and not allow_battery:
+        refuse([f"REFUSED: bench launch on this power state ({len(power)}):"]
+               + [f"  - {p}" for p in power]
+               + ["  plug in AC and turn Low Power Mode off, or pass --allow-battery"])  # fmt: skip
+    if shutil.which(host.CAFFEINATE[0]) is None:
+        refuse(["REFUSED: bench launch: caffeinate not found (the Mac could sleep mid-run)"])
+    _refuse_on_preconditions(cfg, get_settings(), "bench launch", log_path=log_path)
     argv = ["docker", "compose", "run", "--rm", "-T", "broker", "bourse", "bench", "run"]
     argv += ["--config", config.as_posix()] + (["--final"] if final else [])
-    host.append(run_dir, host.sample("start"))
+    argv = host.with_caffeinate(argv)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    host.append(run_dir, start)
+    if power:
+        typer.echo("WARNING: --allow-battery: " + "; ".join(power))
     typer.echo(f"launch {' '.join(argv)} < /dev/null >> {log_path}; host samples {run_dir}/"
                f"{host.HOST_FILE} every {interval:.0f}s")  # fmt: skip
     with log_path.open("a") as log:

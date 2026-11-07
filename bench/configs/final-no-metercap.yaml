@@ -1,0 +1,32 @@
+# BOURSE-Bench final segment (Phase 7 run of the Phase 6b schedule, ADR-0051 fix round 5).
+# Test split; run only via scripts/bench_segment.sh final <this file> <stack flags>.
+# Stack profile no-metercap: exactly the adversaries that control is meant to stop.
+# Runtime adversaries run sole-provider: honest providers of their skill are gated until k real deliveries (ADR-0053 amendment 1).
+name: final-no-metercap
+split: test
+stack_profile: no-metercap
+model_digests:
+  qwen3.5:27b-q4_K_M: 64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59
+adversaries:
+- id: A8a-raw
+  runs: 3
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (burns tokens from the first task); no delivery is possible"
+- id: A8a-patient
+  runs: 3
+  baseline_runs: 1
+  wall_cap_s: 3600
+- id: A8b-raw
+  runs: 3
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (never answers from the first task); no delivery is possible"
+- id: A8b-patient
+  runs: 3
+  baseline_runs: 1
+  wall_cap_s: 3600
+- id: A8c
+  runs: 3
+  baseline_runs: 1
+  wall_cap_s: 1800

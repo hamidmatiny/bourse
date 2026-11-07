@@ -1,0 +1,22 @@
+# Phase 6b dev re-validation (ADR-0053 amendment 1). Not a result.
+# Full stack: card harm (A1), sinkholed egress = caught, harm 0 (A6a), exposure of A8a-patient, exam ending for A8b-raw.
+# Runtime adversaries run sole-provider: honest providers of their skill are gated until k real deliveries (ADR-0053 amendment 1).
+name: dev6b-suite
+split: dev
+adversaries:
+- id: A1
+  baseline_runs: 1
+  wall_cap_s: 900
+- id: A6a
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800
+- id: A8a-patient
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 3600
+- id: A8b-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (never answers from the first task); no delivery is possible"

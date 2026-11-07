@@ -21,7 +21,8 @@ from bourse.llm.base import ChatResult, Provider, Sampling
 from bourse.llm.ollama import OllamaProvider
 from bourse.llm.omniroute import OpenAICompatProvider
 from bourse.llm.router import AllProvidersFailed, Router
-from bourse.meter.budgets import BudgetStore
+from bourse.meter.budgets import Admission, BudgetStore
+from bourse.meter.estimate import estimate_prompt_tokens
 from bourse.meter.fairshare import AgentGate, QueueTimeout, RateLimitUnsatisfiable
 from bourse.meter.keys import agent_for
 from bourse.meter.openai_wire import (
@@ -43,7 +44,8 @@ METER_PORT = 55200
 
 
 BROKER_ID = "broker"
-TASK_BUDGET_EXCEEDED = "task_budget_exceeded"
+TASK_BUDGET_EXCEEDED = "task_budget_exceeded"  # max_calls reached
+BUDGET_EXHAUSTED = "budget_exhausted"  # estimated prompt + max_tokens > remaining tokens
 UNREGISTERED_TASK = "unregistered_task"
 
 
@@ -70,6 +72,8 @@ class MeterConfig:
     queue_timeout_s: float = 60.0
     # Global upstream slots = OLLAMA_NUM_PARALLEL (ADR-0044); wait counts in queue_wait_ms.
     global_parallel: int = 1
+    # Reported at GET /stack-profile for bench preflight (ADR-0053).
+    stack_profile: str = "full"
 
 
 def with_sampling(provider: Provider, sampling: Sampling) -> Provider:
@@ -125,6 +129,20 @@ def create_meter_app(
         store.put(body)
         return JSONResponse(body.model_dump(mode="json"), 201)
 
+    @app.get("/budgets/status")
+    async def budget_status(request: Request, task_id: str) -> Response:
+        """Meter evidence for one task (ADR-0049 amendment 2). Broker key only."""
+        found = agent_for(request.headers.get("authorization"), keys)
+        if found is None:
+            return JSONResponse(error_body("unknown or missing agent key", "unauthorized"), 401)
+        if found not in cfg.privileged_ids:
+            return JSONResponse(error_body("broker key required", "forbidden"), 403)
+        return JSONResponse(store.status(task_id).model_dump(mode="json"), 200)
+
+    @app.get("/stack-profile")
+    async def get_stack_profile() -> dict[str, object]:
+        return {"profile": cfg.stack_profile, "require_task_budget": cfg.require_task_budget}
+
     @app.get("/ollama/api/ps")
     async def ollama_ps(request: Request) -> Response:
         """Loaded models (sizes) for the broker's resident monitor inside compose (ADR-0033)."""
@@ -140,12 +158,21 @@ def create_meter_app(
         found = agent_for(request.headers.get("authorization"), keys)
         if found is None:
             return JSONResponse(error_body("unknown or missing agent key", "unauthorized"), 401)
-        agent_id: str = found
         task_id = request.headers.get(TASK_HEADER)
+        if not task_id:
+            return await _chat(request, found, task_id)
+        store.begin(task_id)
+        try:
+            return await _chat(request, found, task_id)
+        finally:
+            store.end(task_id)
+
+    async def _chat(request: Request, agent_id: str, task_id: str | None) -> Response:
         started = time.monotonic()
         model = ""
         queue_wait_ms = 0.0
         held = False
+        prompt_est: int | None = None  # set once the body parses
 
         async def record(
             status: int, error_kind: str | None, result: ChatResult | None = None
@@ -177,6 +204,7 @@ def create_meter_app(
                     prompt_eval_duration_ms=None if up is None else up.prompt_eval_duration_ms,
                     eval_duration_ms=None if up is None else up.eval_duration_ms,
                     reload=False if up is None else up.reload,
+                    prompt_tokens_est=prompt_est,
                 )
             )
 
@@ -198,18 +226,28 @@ def create_meter_app(
             return await fail(400, "model_not_allowed", f"model {parsed.model!r} is not allowed")
 
         privileged = agent_id in cfg.privileged_ids
+        prompt_est = estimate_prompt_tokens(parsed.messages, parsed.tools)
+        est: int = prompt_est
         if cfg.require_task_budget and not privileged:
             if not task_id or store.get(task_id) is None:
                 return await fail(403, UNREGISTERED_TASK, "unregistered task_id")
             requested = parsed.max_tokens or cfg.max_tokens_per_call
-            if store.would_exceed(task_id, requested):
+            admission = store.admit(task_id, est, requested)
+            if admission is not Admission.OK:
+                code = BUDGET_EXHAUSTED if admission is Admission.TOKENS else TASK_BUDGET_EXCEEDED
+                store.refuse(task_id, code)
                 await record(429, "BUDGET")
                 return JSONResponse(
                     {
                         "error": {
-                            "message": "task budget exceeded",
+                            "message": (
+                                f"task budget: estimated prompt {est} + max_tokens "
+                                f"{requested} > remaining {store.remaining(task_id)}"
+                                if admission is Admission.TOKENS
+                                else "task budget: max calls reached"
+                            ),
                             "type": "BUDGET",
-                            "code": TASK_BUDGET_EXCEEDED,
+                            "code": code,
                         }
                     },
                     429,

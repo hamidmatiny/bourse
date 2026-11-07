@@ -250,3 +250,72 @@ def test_progress_lines_format() -> None:
         "task_elapsed 84s/300s exam_elapsed 250s (admission)",
         "  exam queued: b@x",
     ]
+
+
+async def test_exam_that_cannot_pass_is_failed_not_inconclusive(
+    bed: BrokerBed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dev6b no-metercap: A8a-raw/A8b-raw hit their own task deadline on every exam task
+    (agent-attributable ERROR), the 900 s exam wall then ran out (INFRA) and the exam was
+    INCONCLUSIVE and rescheduled forever. With k=5, pass_n=4 a second failure already makes
+    passing impossible: the exam stops there and is EXAM_FAILED (ADR-0049 amendment, 6b)."""
+    from bourse.stack.smoke import CallResult
+
+    calls: list[str] = []
+
+    async def deadline(*a: Any, **k: Any) -> CallResult:
+        calls.append(str(a[3]))
+        return CallResult(
+            state="TASK_STATE_FAILED",
+            output=None,
+            error="deadline 300s",
+            wall_s=0.01,
+            error_kind="deadline",
+        )
+
+    monkeypatch.setattr(exam_mod, "send_task", deadline)
+    cfg = ExamConfig(
+        k=5, pass_n=4, deadline_s=0.1, exam_timeout_s=30.0, infra_backoff_s=0.0, slot_grace_s=0.05
+    )
+    agent_id = pii_agent(honest).agent_id
+    lines: list[str] = []
+    result = await _runner(bed, cfg, echo=lines.append).run(agent_id)
+    assert result is not None and not result.passed and not result.inconclusive
+    assert len(calls) == 2  # stopped after the 2nd failure (k - pass_n = 1 allowed)
+    assert [t.outcome for t in result.tasks] == ["ERROR", "ERROR"]
+    assert (result.n, result.total) == (0, 5)
+    kinds = [v.kind for v in await bed.registry_service.repo.list_violations(agent_id)]
+    assert kinds == [EXAM_FAILED]
+    assert any("exam cannot pass, stopping" in ln for ln in lines)
+
+
+async def test_infra_with_too_few_failures_stays_inconclusive(
+    bed: BrokerBed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One failure (still allowed) plus INFRA: passing is still possible -> INCONCLUSIVE."""
+    from bourse.stack.smoke import CallResult
+
+    n = 0
+
+    async def first_fails_then_hangs(*a: Any, **k: Any) -> CallResult:
+        nonlocal n
+        n += 1
+        if n == 1:
+            return CallResult(
+                state="TASK_STATE_FAILED", output=None, error="x", wall_s=0.0, error_kind="deadline"
+            )
+        await asyncio.sleep(3600)
+        raise AssertionError
+
+    monkeypatch.setattr(exam_mod, "send_task", first_fails_then_hangs)
+    cfg = ExamConfig(
+        k=2,
+        pass_n=1,
+        deadline_s=0.1,
+        exam_timeout_s=30.0,
+        infra_max_retries=0,
+        infra_backoff_s=0.0,
+        slot_grace_s=0.05,
+    )
+    result = await _runner(bed, cfg).run(pii_agent(honest).agent_id)
+    assert result is not None and result.inconclusive and not result.passed

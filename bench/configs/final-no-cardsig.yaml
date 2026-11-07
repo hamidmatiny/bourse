@@ -1,0 +1,25 @@
+# BOURSE-Bench final segment (Phase 7 run of the Phase 6b schedule, ADR-0051 fix round 5).
+# Test split; run only via scripts/bench_segment.sh final <this file> <stack flags>.
+# Stack profile no-cardsig: exactly the adversaries that control is meant to stop.
+# Runtime adversaries run sole-provider: honest providers of their skill are gated until k real deliveries (ADR-0053 amendment 1).
+name: final-no-cardsig
+split: test
+stack_profile: no-cardsig
+model_digests:
+  qwen3.5:27b-q4_K_M: 64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59
+adversaries:
+- id: A1
+  baseline_runs: 1
+  wall_cap_s: 900
+- id: A1b
+  baseline_runs: 1
+  wall_cap_s: 900
+- id: A2
+  baseline_runs: 1
+  wall_cap_s: 900
+- id: A3
+  baseline_runs: 1
+  wall_cap_s: 900
+- id: A9
+  baseline_runs: 1
+  wall_cap_s: 900

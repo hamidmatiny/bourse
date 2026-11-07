@@ -85,6 +85,17 @@ class RegistryPolicy:
     dev_hosts: frozenset[str] = field(default_factory=frozenset)
     max_card_bytes: int = MAX_CARD_BYTES
     lint: LintConfig = field(default_factory=LintConfig)
+    # Stack-profile ablations (ADR-0053). Never set outside `stack up --profile`.
+    skip_signature: bool = False  # no-cardsig: a failed JWS verification does not reject
+    skip_lint: bool = False  # no-exam: hard lint findings do not reject
+
+    @classmethod
+    def for_profile(cls, profile: str, dev_hosts: frozenset[str]) -> "RegistryPolicy":
+        return cls(
+            dev_hosts=dev_hosts,
+            skip_signature=profile == "no-cardsig",
+            skip_lint=profile == "no-exam",
+        )
 
     def host_allowed(self, url: str, vendor_domain: str) -> bool:
         try:
@@ -222,12 +233,12 @@ class RegistryService:
 
         verify_result = verify_card(card, vendor.keys)
         try:
-            if verify_result is not VerifyResult.OK:
+            if verify_result is not VerifyResult.OK and not self._policy.skip_signature:
                 raise _Reject(VERIFY_TO_REJECT[verify_result], f"verify_result={verify_result}")
             skills = self._check_skills(card)
             self._check_domains(card, vendor)
             lint = lint_card(card_to_dict(card), vendor.domain, self._policy.lint)
-            if lint.hard:
+            if lint.hard and not self._policy.skip_lint:
                 first = lint.hard[0]
                 assert first.reason is not None
                 details = "; ".join(f"{f.field}: {f.detail}" for f in lint.hard[:5])

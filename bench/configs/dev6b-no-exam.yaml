@@ -1,0 +1,23 @@
+# Phase 6b dev re-validation (ADR-0053 amendment 1). Not a result.
+# Stack profile no-exam, its adversaries only.
+# Runtime adversaries run sole-provider: honest providers of their skill are gated until k real deliveries (ADR-0053 amendment 1).
+name: dev6b-no-exam
+split: dev
+stack_profile: no-exam
+adversaries:
+- id: A4a
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800
+- id: A7-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 1800
+- id: A8a-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 3600
+- id: A8b-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 3600

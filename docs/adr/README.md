@@ -50,7 +50,8 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0046](0046-resident-growth-candidates.md) | Measured model-roster options (a–d); candidate d selected | 5b |
 | [0047](0047-single-model-roster.md) | Single-model roster + timeout ordering (supersedes 0021 models) | 5b |
 | [0048](0048-slack-approver-reinstatement.md) | SlackApprover (Socket Mode) + reinstatement flow | 5c |
-| [0049](0049-exam-infra-attribution.md) | Exam INFRA attribution, INCONCLUSIVE, global exam concurrency | 5c |
+| [0049](0049-exam-infra-attribution.md) | Exam INFRA attribution, INCONCLUSIVE, global exam concurrency; amendment 1: an exam that cannot pass is EXAM_FAILED; amendment 2: exam fault attribution from meter evidence | 5c, 6b |
 | [0050](0050-stale-image-guard.md) | Stale-image guard on compose stack up | 5c |
 | [0051](0051-bourse-bench-design.md) | BOURSE-Bench: baselines B0-B3, ablations, generator, frozen split, harness, sizing | 6a |
 | [0052](0052-pii-precise-llm-detection.md) | pii-precise 1.1.0: LLM-proposed contacts accepted by deterministic contact_check | 6a |
+| [0053](0053-stack-profiles-mixed-pools-segments.md) | Stack-profile ablations, mixed provider pools, one fresh stack per segment; amendment 1: one outcome classification, attempted vs harmed, exposure guarantee, per-spec wall cap | 6b |

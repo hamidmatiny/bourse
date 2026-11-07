@@ -23,5 +23,39 @@ metadata could claim arbitrary usage.
   utility on later selection.
 - Unit tests keep `require_task_budget=False` unless they exercise 403/429.
 
+## Amendment: hard cap (Phase 6b, operator decision 2026-11-06)
+ADR-0052 amendment 2 found that the cap was soft. A call was admitted when
+`used + max_tokens <= ceiling`, so the new call's prompt was not counted, and 2/10 dev tasks
+ended above 8192 (8317, 8529).
+
+- **Admission rule.** Before every budgeted call the meter computes a deterministic prompt
+  estimate (`meter/estimate.py`) and admits the call only if
+  `estimate + max_tokens <= ceiling - used`.
+  - Otherwise: HTTP 429, `error.code = budget_exhausted`, usage row `status=429`,
+    `error_kind=BUDGET`, no upstream call.
+  - The max-calls limit keeps `task_budget_exceeded`.
+  - Neither body contains quota/credit/billing wording, so neither trips the global breaker
+    (unit test).
+- **Estimate.**
+  - Every ASCII digit counts 1 token, since Qwen's pre-tokenizer splits digits.
+  - Every other UTF-8 byte counts 1/2.
+  - Plus 16 per message, 16 per tool plus its JSON schema, 256 when tools are present (the
+    template's tool preamble), and 32 per request.
+  - Prose is about 4 bytes per token, so the estimate is about 2x the real count there. It is
+    meant to be at or above the real count, but it is not a tokenizer.
+- **Measured, not assumed.**
+  - Every usage row stores `prompt_tokens_est` (migration 0012).
+  - At the end of each run, `bench run` prints and stores how many successful calls measured
+    more prompt tokens than estimated (`estimate-<ts>.json`).
+  - A call where the estimate is below the real count could still end a task above its ceiling.
+    That count is the evidence for or against the "hard" claim.
+- **Test.** A hermetic test runs the real A8a token-burner executor against the real meter app
+  with a fake upstream. With the ceiling set so that the old rule admits a 7th call (which would
+  end above the ceiling), the hard cap stops it after 6 calls, at 6504 <= 7558 tokens. With the
+  rule reverted to the old one, the test fails.
+- **no-metercap.** The ablation profile (ADR-0053) turns the whole per-task mechanism off;
+  global per-call caps stay on.
+
 ## Status
-Accepted (Phase 5b).
+Accepted (Phase 5b). Hard-cap amendment: Phase 6b, implemented and unit-tested. The estimate's
+under-count rate is first measured in the 6b dev validation.

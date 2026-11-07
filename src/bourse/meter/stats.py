@@ -50,3 +50,32 @@ def recommend_num_ctx(max_tokens: int) -> int:
         if choice >= 2 * max_tokens:
             return choice
     return NUM_CTX_CHOICES[-1]
+
+
+@dataclass(frozen=True)
+class EstimateCheck:
+    """How the meter's prompt estimate compared with the measured prompt (ADR-0041 amendment):
+    over successful calls that carry an estimate, how many measured more tokens than estimated."""
+
+    calls: int
+    under: int  # tokens_in > prompt_tokens_est: the hard cap could have been passed
+    max_ratio: float | None  # max tokens_in / prompt_tokens_est
+    budget_refusals: int  # 429 BUDGET rows (either code)
+
+    def line(self) -> str:
+        ratio = "-" if self.max_ratio is None else f"{self.max_ratio:.2f}"
+        return (
+            f"meter prompt estimate below measured tokens_in: {self.under}/{self.calls} calls; "
+            f"max measured/estimate {ratio}; task-budget refusals {self.budget_refusals}"
+        )
+
+
+def estimate_check(usage: Sequence[LlmUsageRecord]) -> EstimateCheck:
+    rows = [u for u in usage if u.status == 200 and u.prompt_tokens_est]
+    ratios = [u.tokens_in / u.prompt_tokens_est for u in rows if u.prompt_tokens_est]
+    return EstimateCheck(
+        calls=len(rows),
+        under=sum(u.tokens_in > (u.prompt_tokens_est or 0) for u in rows),
+        max_ratio=max(ratios) if ratios else None,
+        budget_refusals=sum(u.status == 429 and u.error_kind == "BUDGET" for u in usage),
+    )

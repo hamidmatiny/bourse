@@ -50,6 +50,15 @@ class BehaviorEvent:
     prefix_target: int = PREFIX_BEFORE_DEVIATE  # EXAM_TASKS + honest_real for this instance
 
 
+def _error_code(resp: httpx.Response) -> str | None:
+    """OpenAI-style error.code of a meter refusal (budget_exhausted / task_budget_exceeded)."""
+    try:
+        code = resp.json()["error"]["code"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return code if isinstance(code, str) else None
+
+
 def _inner(spec: AgentSpec, runtime: AgentRuntime) -> SkillExecutor:
     if SkillId.PII_DETECT in spec.skills:
         return PiiFastExecutor(spec, runtime)
@@ -285,7 +294,8 @@ class AdversaryExecutor(SkillExecutor):
             while True:
                 resp = await self.runtime.http_client.post(url, json=body, headers=headers)
                 if resp.status_code == 429:
-                    raise TaskFailed("token_budget", "task_budget_exceeded")
+                    code = _error_code(resp) or "task_budget_exceeded"
+                    raise TaskFailed("token_budget", code)
                 if resp.status_code >= 400:
                     raise TaskFailed("llm_unavailable", f"HTTP {resp.status_code}")
         except TaskFailed as exc:

@@ -15,6 +15,31 @@ Ablation = Literal[
 ]
 # Ablations the broker can apply itself; the rest need a stack variant (ADR-0051).
 BROKER_ABLATIONS: frozenset[str] = frozenset({"no-spotcheck", "no-canary"})
+# Stack profiles (Phase 6b, ADR-0053): one stack-side control removed, the broker stays full B3.
+StackProfile = Literal["full", "no-exam", "no-cardsig", "no-sinkhole", "no-metercap"]
+STACK_PROFILES: tuple[str, ...] = ("full", "no-exam", "no-cardsig", "no-sinkhole", "no-metercap")
+# The adversaries each removed control is meant to stop; a profile run runs exactly these.
+PROFILE_ADVERSARIES: dict[str, tuple[str, ...]] = {
+    "no-exam": ("A4a", "A7-raw", "A8a-raw", "A8b-raw"),
+    "no-cardsig": ("A1", "A1b", "A2", "A3", "A9"),
+    "no-sinkhole": ("A6a", "A6b", "A6c"),
+    "no-metercap": ("A8a-raw", "A8a-patient", "A8b-raw", "A8b-patient", "A8c"),
+}
+# Mixed pool (ADR-0051 fix round 1): adversaries ACTIVE next to the honest agents.
+MIX_POOL: tuple[str, ...] = ("A4b", "A5a", "A5b", "A6a", "A6b", "A6c", "A8c")
+# Runtime adversaries a registration control (lint / exam) stops before any delivery, so they
+# can never be exposed on that stack; their config spec must say so (ADR-0053 amendment 1).
+_REGISTRATION_GATED = ("A4a", "A7-raw", "A8a-raw", "A8b-raw")
+ADVERSARY_OUTCOMES: tuple[str, ...] = ("caught", "missed", "ineffective", "not-exposed", "error")
+
+
+def registration_gated(adversary_id: str, profile: str) -> bool:
+    """True when this adversary is rejected at registration on this stack (no-exam removes
+    lint and exam, so there nothing gates it)."""
+    return adversary_id in _REGISTRATION_GATED and profile != "no-exam"
+
+
+Pool = Literal["clean", "mixed"]
 SHA256 = r"^[0-9a-f]{64}$"
 
 
@@ -78,11 +103,15 @@ class ConfigSpec(BaseModel):
     repeats: int = Field(default=1, ge=1)
     # First N of the run's cases for this config (B0 N=50 vs 100, ADR-0051); None = all.
     cases: int | None = Field(default=None, ge=1)
+    # mixed: MIX_POOL adversaries are re-admitted and ACTIVE for the whole config (6b).
+    pool: Pool = "clean"
 
     @model_validator(mode="after")
     def _ablation_on_b3(self) -> "ConfigSpec":
         if self.ablation is not None and self.baseline != "B3":
             raise ValueError("ablations apply to B3 only")
+        if self.pool == "mixed" and self.baseline == "B0":
+            raise ValueError("B0 has no broker and no provider pool")
         return self
 
 
@@ -93,6 +122,15 @@ class AdversarySpec(BaseModel):
     mode: Literal["mixed", "sole-provider", "card"] | None = None
     runs: int = Field(default=6, ge=1)
     honest_real: int | None = Field(default=None, ge=0)  # sleeper honest e2e tasks
+    # Honest e2e runs before the scenario, all of which must succeed (a stack health gate; its
+    # numbers are not part of the bench row). run_phase5 runs min(runs, baseline_runs).
+    baseline_runs: int = Field(default=3, ge=1)
+    # Wall cap for the whole spec (registration, exam, baseline, every mode). On expiry the
+    # spec's row is an error with actual "spec wall cap <s>s" and the segment moves on.
+    wall_cap_s: float = Field(default=3600.0, gt=0, le=4 * 3600)
+    # Why this adversary cannot get a delivery on this stack (required exactly when it is
+    # registration-gated; see registration_gated). A not-exposed row is never silent.
+    no_exposure_reason: str | None = None
 
 
 class PiiSeparationSpec(BaseModel):
@@ -116,12 +154,62 @@ class BenchConfig(BaseModel):
     adversaries: tuple[AdversarySpec, ...] = ()
     pii_separation: PiiSeparationSpec | None = None
     model_digests: dict[str, str] = Field(default_factory=dict)  # model tag -> sha256 digest
+    # The stack this config must run on; preflight compares it with the live stack (ADR-0053).
+    stack_profile: StackProfile = "full"
 
     @model_validator(mode="after")
     def _unique_ids(self) -> "BenchConfig":
         ids = [c.id for c in self.configs]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate config id")
+        return self
+
+    @model_validator(mode="after")
+    def _mixed_pool_runs_alone(self) -> "BenchConfig":
+        """A mixed config needs a fresh stack (REVOKED is terminal; the adversary suite revokes
+        vendor-x; another config would inherit quarantines): it is the only thing in its run."""
+        mixed = [c for c in self.configs if c.pool == "mixed"]
+        if mixed and (len(self.configs) > 1 or self.adversaries or self.pii_separation):
+            raise ValueError(
+                f"mixed config {mixed[0].id} must be the only config in its run, without "
+                "adversaries or pii_separation (fresh stack per mixed config, ADR-0053)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _profile_runs_only_its_adversaries(self) -> "BenchConfig":
+        if self.stack_profile == "full":
+            return self
+        if self.configs or self.pii_separation is not None:
+            raise ValueError(
+                f"stack_profile {self.stack_profile}: adversaries only; the full-stack control "
+                "rows come from the full-profile adversary suite (ADR-0053)"
+            )
+        want = set(PROFILE_ADVERSARIES[self.stack_profile])
+        got = {a.id for a in self.adversaries}
+        # dev split: a non-empty subset is allowed for short re-checks; test split: exactly.
+        ok = (got and got <= want) if self.split == "dev" else got == want
+        if not ok:
+            rule = "a subset of" if self.split == "dev" else "exactly"
+            raise ValueError(
+                f"stack_profile {self.stack_profile} runs {rule} {sorted(want)}, got {sorted(got)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _exposure_reasons(self) -> "BenchConfig":
+        for a in self.adversaries:
+            gated = registration_gated(a.id, self.stack_profile)
+            if gated and not a.no_exposure_reason:
+                raise ValueError(
+                    f"{a.id} is rejected at registration on stack {self.stack_profile}: "
+                    "set no_exposure_reason (ADR-0053 amendment 1)"
+                )
+            if not gated and a.no_exposure_reason:
+                raise ValueError(
+                    f"{a.id} gets deliveries on stack {self.stack_profile} (sole-provider): "
+                    "no_exposure_reason is only for registration-gated adversaries"
+                )
         return self
 
     @property
@@ -165,6 +253,17 @@ class CellResult(BaseModel):
     error: str | None = None
     started_at: datetime
     finished_at: datetime
+    # Mixed pool (6b). Clean cells keep the defaults.
+    pool: Pool = "clean"
+    pool_epoch: str | None = None  # when this invocation re-admitted the pool (resume marker)
+    delegations: int = Field(default=0, ge=0)  # A2A delegations in this cell (incl. retries)
+    adversary_served: tuple[str, ...] = ()  # agent_id per delegation sent to an adversary
+    harmed: bool | None = None  # None for clean cells
+    harm_agents: tuple[str, ...] = ()  # adversaries that caused harm in this cell
+    harm_detail: str = ""
+    # Members that attempted their attack in this cell, harm or not (ADR-0053 amendment 1).
+    attempt_agents: tuple[str, ...] = ()
+    quarantined_adversaries: tuple[str, ...] = ()  # pool members QUARANTINED at cell end
 
     @property
     def all_passed(self) -> bool:
@@ -179,7 +278,7 @@ class AdversaryResult(BaseModel):
     id: str
     mode: str
     honest_real: int | None
-    status: str  # caught | missed | not-exposed | error | zero-effect | ...
+    status: str  # one of ADVERSARY_OUTCOMES (bourse.adversaries.outcome)
     actual: str
     expected: str
     exposure: int
@@ -192,6 +291,13 @@ class AdversaryResult(BaseModel):
     harmed_total: int
     spec_wall_s: float = Field(ge=0)  # wall of the whole adversary spec invocation
     finished_at: datetime
+    # ADR-0053 amendment 1 (defaults keep rows written before it readable).
+    control: str = ""  # the control that stopped it (caught only)
+    attempted: int = 0  # attack actions observed
+    signals: str = ""  # controls that fired without stopping it
+    exposure_target: int = 0  # k real deliveries aimed for (sole-provider); 0 = none
+    rule: str = ""  # R1..R5
+    note: str = ""  # under-exposure, infra detail, or the config's no_exposure_reason
 
 
 class PiiCaseResult(BaseModel):
@@ -269,6 +375,10 @@ class ConfigSummary(BaseModel):
     latency_s_p50: Quantile
     latency_s_p95: Quantile
     wall_s_total: float
+    # Mixed pool only (6b): cases with harm, and subtasks served by an adversary.
+    harmed: Proportion | None = None
+    adversary_share: Proportion | None = None
+    pool_adversaries: tuple["PoolAdversarySummary", ...] = ()
 
 
 class AdversarySummary(BaseModel):
@@ -279,6 +389,11 @@ class AdversarySummary(BaseModel):
     not_exposed: Proportion
     error: Proportion
     harmed: Proportion
+    ineffective: Proportion | None = None  # None only in summaries from before amendment 1
+    # Of the caught rows: stopped with harm 0 vs stopped after harm (detective controls, R2).
+    # None only in summaries from before ADR-0049 amendment 2.
+    caught_before_harm: Proportion | None = None
+    caught_after_harm: Proportion | None = None
 
 
 class PiiAgentSummary(BaseModel):
@@ -293,6 +408,26 @@ class PiiAgentSummary(BaseModel):
     calls_p50: Quantile | None = None
     wall_s_p50: Quantile | None = None
     over_budget: Proportion | None = None  # cases with tokens > task_max_tokens
+
+
+class PoolAdversarySummary(BaseModel):
+    """One mixed-pool adversary over a config: subtasks served, harmful ones, and the cell
+    (1-based, in run order) of its first harm and of its quarantine."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_id: str
+    served: int
+    harmed: int
+    first_harm_cell: int | None
+    quarantined_cell: int | None
+    attempted: int = 0  # cells in which it attempted its attack (egress, misreport)
+
+    @property
+    def detect_delay_cells(self) -> int | None:
+        if self.first_harm_cell is None or self.quarantined_cell is None:
+            return None
+        return self.quarantined_cell - self.first_harm_cell
 
 
 class Speedup(BaseModel):
@@ -320,6 +455,7 @@ class Provenance(BaseModel):
     grader_version: str
     config_sha256: str
     at: datetime
+    stack_profile: StackProfile = "full"  # live stack profile, checked against the config
 
 
 class HostSample(BaseModel):
@@ -371,3 +507,6 @@ class BenchSummary(BaseModel):
     pii_identical: Proportion | None = None
     # Host conditions from host.jsonl; None when the run was not started by `bench launch`.
     host: HostSummary | None = None
+
+
+ConfigSummary.model_rebuild()

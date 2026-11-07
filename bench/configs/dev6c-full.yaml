@@ -1,0 +1,10 @@
+# Phase 6b dev check of ADR-0049 amendment 2 (exam fault attribution). Not a result.
+# Full stack: A8b-raw (slow-loris) must end EXAM_FAILED -> caught/exam, not "exam inconclusive".
+name: dev6c-full
+split: dev
+adversaries:
+- id: A8b-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (never answers from the first task); no delivery is possible"

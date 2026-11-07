@@ -5,6 +5,8 @@ and `bourse stack wait-active`. Queries the compose database (bourse_compose) on
 """
 
 import subprocess
+import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import anyio
@@ -21,6 +23,66 @@ pytestmark = pytest.mark.compose
 
 SETTINGS = get_settings()
 REGISTRY = SETTINGS.bourse_registry_url.rstrip("/")
+
+
+# Phase5 subset: A8b-raw is left out (its exam alone is 2 x 300 s deadlines; the dev6b
+# segments cover it). Timeout derived from --runs: worst case, not the expected time.
+PHASE5_RUNS = 1
+PHASE5_ONLY = ("A4a", "A6a", "A7-raw")
+PER_RUN_S = 150  # one honest e2e run, measured 70-110 s
+EXAM_S = 400  # one adversary registration + exam (early stop after 2 failures)
+
+
+def phase5_timeout_s(runs: int, only: Sequence[str]) -> int:
+    from bourse.adversaries.catalog import BY_ID
+    from bourse.adversaries.runner import EXPOSURE_SPARE_RUNS, exposure_target
+    from bourse.contracts.bench import registration_gated
+
+    runtime = [sid for sid in only if sid in BY_ID]
+    e2e = min(runs, 1)  # baseline_runs=1 below
+    for sid in runtime:
+        if registration_gated(sid, "full"):
+            continue  # rejected by lint / exam: no e2e run
+        k = exposure_target(sid, "full")
+        e2e += max(runs, k + EXPOSURE_SPARE_RUNS)
+    return PER_RUN_S * e2e + EXAM_S * len(runtime) + 120
+
+
+def _remove_broker_runs() -> None:
+    """Remove every broker run container (an orphan keeps the broker's fixed IP:
+    'Address already in use' for the next run)."""
+    ids = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            "label=com.docker.compose.project=bourse",
+            "--filter",
+            "label=com.docker.compose.service=broker",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    if ids:
+        subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, check=False)
+
+
+def compose_run_broker(args: Sequence[str], timeout_s: int) -> subprocess.CompletedProcess[str]:
+    """`docker compose run --rm broker ...` that never leaves an orphan: on timeout the
+    client is killed and the named container is removed."""
+    _remove_broker_runs()
+    name = f"bourse-test-broker-{uuid.uuid4().hex[:8]}"
+    try:
+        return subprocess.run(
+            ["docker", "compose", "run", "--rm", "--name", name, "broker", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
 
 
 def compose_db_url() -> str:
@@ -123,24 +185,21 @@ def test_attacks_phase5_fast_subset() -> None:
     print(up.stdout[-1000:], up.stderr[-1000:])
     assert up.returncode == 0, up.stderr[-2000:]
     _purge_vendor_x_agents()
-    proc = subprocess.run(
+    timeout = phase5_timeout_s(PHASE5_RUNS, PHASE5_ONLY)
+    print(f"phase5 subset {','.join(PHASE5_ONLY)} runs={PHASE5_RUNS} timeout={timeout}s")
+    proc = compose_run_broker(
         [
-            "docker",
-            "compose",
-            "run",
-            "--rm",
-            "broker",
             "bourse",
             "attacks",
             "phase5",
             "--runs",
-            "2",
+            str(PHASE5_RUNS),
+            "--baseline-runs",
+            "1",
             "--only",
-            "A4a,A6a,A7-raw,A8b-raw",
+            ",".join(PHASE5_ONLY),
         ],
-        capture_output=True,
-        text=True,
-        timeout=900,
+        timeout,
     )
     print(proc.stdout[-4000:])
     assert proc.returncode == 0, proc.stderr[-2000:]
@@ -152,12 +211,7 @@ def test_attacks_phase5_fast_subset() -> None:
 
 
 def test_e2e_inside_compose() -> None:
-    proc = subprocess.run(
-        ["docker", "compose", "run", "--rm", "broker", "bourse", "e2e", "all", "--repeat", "1"],
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
+    proc = compose_run_broker(["bourse", "e2e", "all", "--repeat", "1"], 900)
     print(proc.stdout[-3000:])
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert "runs succeeded 3/3" in proc.stdout

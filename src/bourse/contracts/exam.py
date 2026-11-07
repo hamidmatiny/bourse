@@ -1,5 +1,7 @@
 """Admission exam result contracts (ADR-0037, ADR-0049)."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -7,6 +9,7 @@ class ExamTaskOutcome(BaseModel):
     """One exam task slot (final attempt after INFRA retries).
 
     outcome: passed | grader-failed | ERROR | INFRA | EXAM_TIMEOUT
+    A timed-out task is ERROR (agent fault) or INFRA by meter evidence (ADR-0049 amendment 2).
     infra_retries: how many INFRA failures were retried before this final outcome.
     """
 
@@ -17,6 +20,11 @@ class ExamTaskOutcome(BaseModel):
     outcome: str
     detail: str = ""
     infra_retries: int = Field(default=0, ge=0)
+    # ADR-0049 amendment 2: who is at fault for a failed/timed-out task, the rule that decided
+    # (A1..A4 agent, I1..I5 infra; see bourse.trust.exam_fault) and the meter evidence.
+    fault: Literal["agent", "infra"] | None = None
+    fault_rule: str | None = None
+    evidence: str = ""
 
 
 class ExamReport(BaseModel):

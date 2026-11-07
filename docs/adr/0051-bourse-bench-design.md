@@ -37,10 +37,10 @@ so a broker that skips registration fails every delegation. They are a resource 
 |---|---|---|---|
 | B3-no-spotcheck | runtime spot checks | broker (`BrokerControls.spot_checks=False`) | implemented |
 | B3-no-canary | canaries | broker (`canary_every=0`) | implemented |
-| B3-no-metercap | per-task meter budgets | meter (`require_task_budget=False`) + broker | config only; needs a meter variant (6b) |
-| B3-no-exam | admission exam | registry: agents activated by audited `--force-unsafe` | config only; needs a stack variant (6b) |
-| B3-no-cardsig | card signature check | registry registration | config only; needs a stack variant (6b) |
-| B3-no-sinkhole | egress DNS sinkhole | compose network | config only; needs a stack variant (6b) |
+| B3-no-metercap | per-task meter budgets | meter (`require_task_budget=False`) + broker | 6b: stack profile `no-metercap` (ADR-0053) |
+| B3-no-exam | admission exam (and card lint) | registry: audited activation without exam | 6b: stack profile `no-exam` (ADR-0053) |
+| B3-no-cardsig | card signature check | registry registration | 6b: stack profile `no-cardsig` (ADR-0053) |
+| B3-no-sinkhole | egress detection + quarantine (capture stays) | sinkhole, egress-dns | 6b: stack profile `no-sinkhole` (ADR-0053) |
 
 The harness refuses a config whose ablation needs a stack variant it cannot verify, with the
 exact reason. It never silently runs full B3 under an ablation's name.
@@ -348,6 +348,159 @@ Final configs: B0 (N=50), B1, B3, B3-no-spotcheck, B3-no-canary, B1-mix, B3-mix 
     ERROR` when every cell it ran errored. `bench launch` exits with the run's code and on
     failure prints the last 20 lines of the run log.
 
+## Fix round 4 (Phase 6b, operator decisions 2026-11-06)
+
+### Ablations that need a stack, and mixed pools
+Both are implemented in ADR-0053. Stack ablations are stack profiles that run their own
+adversaries. Mixed configs run one per fresh stack. B2 and B2-mix stay dropped.
+
+### Re-sizing with pii-precise 1.1.0
+Sources, all dev:
+- `pilot-6a` per-cell walls;
+- `adr0052-ties-6a` re-run (pii-precise 1.1.0, AC power, Low Power Mode off);
+- the Phase 5 adversary reports in `data/attacks/`.
+
+**Measured**
+| input | value | source |
+|---|---|---|
+| B0 s/case | 218.5 | pilot-6a, 5 cells |
+| B1 cell, pii served by pii-fast | 66, 67, 74 s (mean 69.0) | pilot-6a B1 |
+| extra wall when pii-precise 1.1.0 serves the pii subtask | +28.7 s (82, 84 vs 49, 52, 62) | adr0052-ties-6a B2 cells |
+| B3 s/case | 79.8 (pilot-6a, 5/5 pii-fast); 69.9 (ties re-run) | larger one used |
+| harness overhead (elapsed / sum of cell walls) | 811 / 678 = 1.20 | adr0052-ties-6a, 10 broker cells |
+| stack up incl. exams | 442 s, 573 s | two 6a stack ups |
+| full adversary suite, 19 scenarios, A5a/A5b mixed only | 8192 s | phase5-20261104T130644Z |
+| one A5 sole-provider scenario (incl. its 3-run baseline) | 358-1502 s, 7 runs | phase5-20261105T* |
+
+**Estimated (not measured)**
+- B1 s/case = 69.0 + 0.5 x 28.7 = 83.4. B1 picks either PII agent with p = 0.5.
+- Mixed configs run at 1.0-1.5x the clean s/case, as in fix round 1, plus pool admission
+  (7 exams). Admission is assumed to take at most 15 min.
+- Profile segments use 431 s per e2e scenario, the mean of the 8192 s suite.
+- One baseline honest e2e run per adversary spec costs about 80 s (B3 s/case).
+  - The bench calls the phase5 runner once per spec, and each call runs a health-gate baseline
+    of `baseline_runs` honest e2e runs.
+  - The 6b configs set `baseline_runs: 1` (default 3). The baseline's numbers are not in the
+    bench row.
+- The Nov 4 suite timing predates 5c and 6a. The `dev6b-*` validation segments replace these
+  estimates with measurements before night 1.
+
+**Segments** (hours = N x s/case x 1.20 + stack up 0.17 h)
+| segment (config) | stack up flags | hours |
+|---|---|---|
+| final-suite (A1-A9, all variants; A5 mixed + sole) | `--with-adversaries` | 8192 - 240 (its own 3-run baseline) + 2 x 1502 + 19 x 80 s = 12476 s = 3.47, + 0.17 = 3.64 |
+| final-b3-mix (N=100) | `--with-adversaries` | 2.66 x 1.0-1.5 + 0.25 + 0.17 = 3.08-4.41 |
+| final-b1-mix (N=100) | `--with-adversaries` | 2.78 x 1.0-1.5 + 0.25 + 0.17 = 3.20-4.59 |
+| final-b3 (N=100) | - | 2.66 + 0.17 = 2.83 |
+| final-b3-no-spotcheck (N=100) | - | 2.83 |
+| final-b3-no-canary (N=100) | - | 2.83 |
+| final-b1-b0 (B1 N=100, then B0 N=50) | - | 2.78 + 3.64 + 0.17 = 6.59 |
+| final-no-cardsig | `--stack-profile no-cardsig --with-adversaries` | 5 x (80 s baseline + about 30 s of registrations) + stack up = 0.32 |
+| final-no-sinkhole | `--stack-profile no-sinkhole --with-adversaries` | 3 x (431 + 80) s + stack up = 0.59 |
+| final-no-exam | `--stack-profile no-exam --with-adversaries` | 4 x (431 + 80) s + stack up = 0.73 |
+| final-no-metercap | `--stack-profile no-metercap --with-adversaries` | 5 x (431 + 80) s + an A8a-raw exam without a cap (up to 5 x 300 s) + stack up = 1.29 |
+
+### Schedule (8 h per night at most, using the high estimates)
+| night | segments | hours |
+|---|---|---|
+| 1 | final-suite; final-b3-mix | 6.72-8.05 |
+| 2 | final-b3; final-b1-mix | 6.03-7.42 |
+| 3 | final-b3-no-spotcheck; final-b3-no-canary; final-no-sinkhole; final-no-cardsig | 6.57 |
+| 4 | final-b1-b0; final-no-exam | 7.32 |
+| 5 | final-no-metercap | 1.29 |
+
+- **Night 1 is short of the request.** The operator asked for the suite, B3 and B3-mix on
+  night 1. Together they need 9.55-10.88 h, which does not fit in 8 h. Night 1 runs the suite
+  and B3-mix, because B3-mix is the result the trust layer exists for. B3 opens night 2; clean
+  B3 already has a 5-case dev measurement (5/5).
+- **Night 1's upper bound.** Night 1 fits in 8 h only if B3-mix runs at no more than 1.48x clean
+  B3 (3.64 + 0.42 + 2.66 x f <= 8). If the dev measurement (`dev6b-b3-mix`) gives f > 1.48,
+  B3-mix and B3 swap nights: night 1 becomes the suite plus B3 (6.47 h).
+- **Order.** Segments in a night are joined by `;`. Each prints `=== SEGMENT <name> exit <code>`.
+- **No code changes between nights.** `src/` does not change between nights. A needed fix
+  invalidates the nights already run, and they are rerun.
+- **Re-issue after dev validation.** The schedule is re-issued after the dev validation if a
+  measured segment time breaks the 8 h bound.
+
+## Fix round 5 (after the dev6b validation, 2026-11-06)
+
+### Measured (dev6b, 6 segments, `data/logs/dev6b.log` SEGMENT lines)
+| segment | wall s | bench s | stack down+up s | note |
+|---|---|---|---|---|
+| dev6b-suite (A1, A6a, A8a-patient; mixed, 2 runs) | 1373 | 752 | 621 | specs 85, 359, 308 s |
+| dev6b-b3-mix (3 cells) | 1183 | 611 | 572 | pool admission 323 s; cells 105, 108 s elapsed (walls 75.6-98.6 s) |
+| dev6b-no-cardsig (5 card specs) | 946 | 446 | 500 | specs 59-183 s |
+| dev6b-no-sinkhole (3 specs) | 1551 | 1053 | 498 | specs 336-372 s |
+| dev6b-no-exam (4 specs) | 1600 | 1534 | 66 | no exams at stack up; specs 272-549 s |
+| dev6b-no-metercap (5 specs) | 13310 | 12809 | 501 | A8a-raw 4603 s, A8b-raw 4717 s (looping INCONCLUSIVE exams, ADR-0049 amendment); others 1403, 1124, 962 s |
+| total | 19963 (5.55 h) | | | estimate was 3-3.5 h; the excess 3.6 h is the two looping exams |
+
+- **B3-mix factor:** 106.5 s per cell (mean of the 2 cells after admission) against 95.8 s for
+  clean B3 (79.8 x 1.20). That is 1.11, below the 1.48 swap threshold of fix round 4. 3 cells
+  only.
+- **One e2e run, launch included:** about 100 s (cells 75.6-98.6 s wall, 105-108 s elapsed).
+- **One adversary spec with exam, baseline and 2 runs:** 308-372 s.
+
+### Estimated per spec (amendment 1 of ADR-0053: sole-provider, k = 3 real deliveries)
+- Runtime spec, k = 3, nothing holding a delivery: 360 s (measured 2-run spec) + 100 s = 460 s.
+  A4b, A6a-c, A7-patient; A6 on the full stack stops sooner, at the first quarantine.
+- A delivery held by the budget (burner to refusal, about 200 s) or by the 300 s deadline adds
+  its time per delivery:
+  - A8a-patient: 460 + 3 x 200 = 1060 s;
+  - A8b-patient: 460 + 3 x 300 = 1360 s;
+  - under no-metercap the burner also runs to the deadline: 360 + 3 x 400 = 1560 s.
+- A8c: 962 s measured (exam + 2 runs) + 100 = 1060 s.
+- A5a and A5b (mixed 6 runs + sole up to 12, until quarantine): 2200 s each. Sources: A5
+  sole-provider 358-1502 s measured in phase5-20261105, plus 6 x 100 s mixed and the exam.
+- Registration-gated on the full stack (no delivery; baseline + registration + exam until the
+  2nd failure):
+  - A4a: 120 s;
+  - A7-raw: 200 s;
+  - A8a-raw: 100 + 2 x 200 = 500 s;
+  - A8b-raw: 100 + 2 x 300 = 700 s.
+- Cards: 89 s each (measured mean).
+- Under no-exam (no exam, baseline + 3 runs):
+  - A4a and A7-raw: 400 s each;
+  - A8a-raw: 100 + 3 x 300 = 1000 s;
+  - A8b-raw: 100 + 3 x 400 = 1300 s.
+- **Wall cap per spec:** about 2x these estimates.
+  - 900 s for cards, 1800 s for most runtime specs, 2700 s for registration-gated specs
+    (adversary exam wait 2010 s + baseline), 3600 s for A8a/A8b deliveries, 5400 s for A5.
+  - Pinned by `test_final_adversary_specs_are_capped_and_explain_non_exposure`.
+
+### Segments
+| segment | hours | how |
+|---|---|---|
+| final-suite (19 specs) | 3.55 | 450 cards + 1520 gated (120 + 200 + 500 + 700) + 460 A4b + 4400 A5 + 1380 A6 + 460 A7-patient + 1060 + 1360 + 1060 A8 = 12150 s, + stack 0.17 |
+| final-b3-mix (N=100) | 3.21 | 100 x 106.5 s measured + admission 323 s + stack 572 s |
+| final-b3 (N=100) | 2.83 | 100 x 95.8 s + 0.17 (pilot-6a, not re-measured) |
+| final-b1-mix (N=100) | 3.33 | B1 83.4 x 1.20 x 1.11 measured mix factor = 111.1 s/case + admission 323 s + stack 572 s |
+| final-b3-no-spotcheck, final-b3-no-canary | 2.83 each | as B3 |
+| final-b1-b0 | 6.59 | unchanged (fix round 4) |
+| final-no-cardsig | 0.26 | measured dev segment (946 s) |
+| final-no-sinkhole | 0.52 | 3 x 460 s + stack 498 s |
+| final-no-exam | 0.88 | 400 + 400 + 1000 + 1300 s + stack 66 s |
+| final-no-metercap | 1.69 | 700 + 700 + 1560 + 1560 + 1060 s + stack 501 s; wall caps bound it at 4.0 h |
+
+### Block schedule (8 h per block at most)
+| block | segments | hours |
+|---|---|---|
+| 1 | final-suite; final-b3-mix | 6.76 |
+| 2 | final-b3; final-b1-mix | 6.16 |
+| 3 | final-b3-no-spotcheck; final-b3-no-canary; final-no-sinkhole; final-no-cardsig | 6.44 |
+| 4 | final-b1-b0; final-no-exam | 7.47 |
+| 5 | final-no-metercap | 1.69 |
+
+- **Block 1 is the suite plus B3-mix,** as the operator allowed (suite + B3 or B3-mix). B3-mix
+  is the result the trust layer exists for, and its measured factor 1.11 keeps the block at
+  6.76 h. Suite + B3 would be 6.38 h.
+- **Not folded into fewer blocks.** no-metercap would fit into block 2 (7.85 h) but not
+  block 3 (8.13 h). The 0.15 h margin is too thin for estimates built on 3 B3-mix cells and on
+  unmeasured sole-provider specs.
+- **The sole-provider adversary path is new and not yet measured.** The re-validation segments
+  (dev6b-suite, -no-sinkhole, -no-exam, -no-metercap) measure it. This table is re-issued from
+  those numbers before block 1, if any segment breaks its 8 h bound.
+
 ## Consequences
 - B0-B3 are comparable on the same frozen cases; ablations isolate one control each. Three
   ablations need stack variants and are not runnable in 6a; they are listed, not faked.
@@ -356,6 +509,7 @@ Final configs: B0 (N=50), B1, B3, B3-no-spotcheck, B3-no-canary, B1-mix, B3-mix 
 - A crash costs at most one case; a full test run can span several nights.
 
 ## Status
+Fix round 5 (2026-11-06): measured dev6b timings, block schedule; re-validation pending.
 Accepted (operator, 2026-11-06). N=100 per config, B0 N=50. The final configs are those listed in
 fix round 3. The sizing table uses pilot s/case from before ADR-0052. pii-precise 1.1.0 now takes
 43.0 s/case p50 on dev (ADR-0052 amendment 3), and how that affects broker cells is not measured.

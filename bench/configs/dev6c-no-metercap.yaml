@@ -1,0 +1,17 @@
+# Phase 6b dev check of ADR-0049 amendment 2 (exam fault attribution). Not a result.
+# no-metercap: A8a-raw (calls beyond its task budget, rule A3) and A8b-raw (stall, rule A4)
+# must end EXAM_FAILED -> caught/exam, not "exam inconclusive".
+name: dev6c-no-metercap
+split: dev
+stack_profile: no-metercap
+adversaries:
+- id: A8a-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (burns tokens from the first task); no delivery is possible"
+- id: A8b-raw
+  runs: 1
+  baseline_runs: 1
+  wall_cap_s: 2700
+  no_exposure_reason: "admission exam rejects it (never answers from the first task); no delivery is possible"

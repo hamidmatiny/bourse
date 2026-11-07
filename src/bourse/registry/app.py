@@ -1,5 +1,6 @@
 """Registry HTTP API (FastAPI). Every response body is a contract model."""
 
+import asyncio
 import hmac
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated
@@ -38,20 +39,52 @@ def _error(status: int, detail: str) -> JSONResponse:
     return JSONResponse(ApiError(status=status, detail=detail).model_dump(), status_code=status)
 
 
+NO_EXAM_ACTOR = "stack-profile:no-exam"
+
+
 def create_app(
     service: RegistryService,
     admin_token: str,
     exams: "ExamScheduler | None" = None,
     rate_per_min: int = 10,
+    stack_profile: str = "full",
 ) -> FastAPI:
-    """`exams`: when set, accepted PENDING registrations start an admission exam (ADR-0037)."""
+    """`exams`: when set, accepted PENDING registrations start an admission exam (ADR-0037).
+
+    `stack_profile` "no-exam" (ADR-0053): accepted PENDING registrations go ACTIVE at once,
+    with an audited transition by NO_EXAM_ACTOR, and no exam is scheduled.
+    """
     app = FastAPI(title="BOURSE registry", version="0.1.0")
     repo = service.repo
     buckets = TokenBucket(rate_per_min)
     # Process-local selection gate (ADR-0042 sole-provider). Not TrustState; not persisted.
     unavailable: set[str] = set()
-    if exams is not None:
+    unavailable_for: dict[SkillId, set[str]] = {}  # per-skill selection gate
+    pending_activations: set[asyncio.Task[object]] = set()
+    if stack_profile == "no-exam":
+
+        async def _activate(agent_id: str) -> None:
+            await transition(
+                repo,
+                agent_id,
+                TrustState.ACTIVE,
+                actor=NO_EXAM_ACTOR,
+                reason="stack profile no-exam: lint and admission exam disabled (ablation)",
+            )
+
+        def _schedule_activation(agent_id: str) -> None:
+            task = asyncio.get_running_loop().create_task(_activate(agent_id))
+            pending_activations.add(task)
+            task.add_done_callback(pending_activations.discard)
+
+        service.on_accepted = _schedule_activation
+    elif exams is not None:
         service.on_accepted = exams.schedule
+
+    @app.get("/stack-profile")
+    async def get_stack_profile() -> dict[str, str]:
+        """The stack profile this registry runs under (bench preflight compares it)."""
+        return {"profile": stack_profile}
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -110,11 +143,12 @@ def create_app(
         q: Annotated[str | None, Query(max_length=200)] = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> list[AgentRecord]:
-        fetch = limit if not unavailable else min(200, limit + len(unavailable))
+        hidden = unavailable | (unavailable_for.get(skill, set()) if skill is not None else set())
+        fetch = limit if not hidden else min(200, limit + len(hidden))
         rows = await repo.search(skill=skill, state=state, q=q, limit=fetch)
-        if not unavailable:
+        if not hidden:
             return rows
-        return [a for a in rows if a.agent_id not in unavailable][:limit]
+        return [a for a in rows if a.agent_id not in hidden][:limit]
 
     @app.get("/agents/{agent_id}")
     async def get_agent(agent_id: str) -> AgentRecord:
@@ -128,11 +162,15 @@ def create_app(
         """Mark agent unavailable for selection without changing TrustState (ADR-0042)."""
         if await repo.get_agent(agent_id) is None:
             raise HTTPException(404, "unknown agent")
+        gate = unavailable if body.skill is None else unavailable_for.setdefault(body.skill, set())
         if body.available:
-            unavailable.discard(agent_id)
+            gate.discard(agent_id)
         else:
-            unavailable.add(agent_id)
-        return {"agent_id": agent_id, "available": body.available}
+            gate.add(agent_id)
+        out: dict[str, bool | str] = {"agent_id": agent_id, "available": body.available}
+        if body.skill is not None:
+            out["skill"] = body.skill.value
+        return out
 
     @app.get("/agents/{agent_id}/revisions")
     async def revisions(agent_id: str) -> list[CardRevision]:

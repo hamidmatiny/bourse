@@ -1,0 +1,10 @@
+# BOURSE-Bench final segment (Phase 7 run of the Phase 6b schedule, ADR-0051 fix round 4).
+# Test split; run only via scripts/bench_segment.sh final <this file> <stack flags>.
+name: final-b3
+split: test
+cases: 100
+model_digests:
+  qwen3.5:27b-q4_K_M: 64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59
+configs:
+- id: B3
+  baseline: B3

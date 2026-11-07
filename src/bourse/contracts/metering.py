@@ -37,6 +37,27 @@ class TaskBudget(BaseModel):
     max_calls: int = Field(gt=0)
 
 
+class TaskBudgetStatus(BaseModel):
+    """Meter-side state of one task (GET /budgets/status, broker key; ADR-0049 amendment 2).
+
+    The exam reads this when a task fails or times out, to attribute the failure from meter
+    evidence instead of the agent's own report. calls/tokens count admitted, completed calls;
+    in_flight counts requests inside the meter (gate queue + upstream) right now; refusals are
+    the budget codes the meter returned for this task.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str
+    registered: bool
+    max_tokens: int | None = None
+    max_calls: int | None = None
+    calls: int = Field(default=0, ge=0)
+    tokens: int = Field(default=0, ge=0)
+    in_flight: int = Field(default=0, ge=0)
+    refusals: tuple[str, ...] = ()
+
+
 class BudgetSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -85,6 +106,9 @@ class LlmUsageRecord(BaseModel):
     prompt_eval_duration_ms: float | None = None
     eval_duration_ms: float | None = None
     reload: bool = False  # load_duration_ms > 1000
+    # Meter's deterministic prompt estimate used by the hard task cap (ADR-0041 amendment);
+    # None for rows written before Phase 6b or for requests that did not parse.
+    prompt_tokens_est: int | None = Field(default=None, ge=0)
 
 
 class ToolUsageRecord(BaseModel):

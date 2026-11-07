@@ -247,7 +247,7 @@ def database_url(settings: Settings) -> str:
     return settings.bourse_database_url
 
 
-def write_compose_env(settings: Settings) -> list[Path]:
+def write_compose_env(settings: Settings, stack_profile: str = "full") -> list[Path]:
     """data/run/env/<service>.env (0600) from data/run/secrets.json; never committed."""
     from bourse.crypto.keys import DEFAULT_KEY_DIR, generate_vendor_keyset
     from bourse.llm.latency import load_deadline_by_model
@@ -270,6 +270,7 @@ def write_compose_env(settings: Settings) -> list[Path]:
         model_small=settings.bourse_model_small,
         ollama_num_parallel=settings.ollama_num_parallel,
         exam_deadline_by_model=deadline_env,
+        stack_profile=stack_profile,
     )
     for name, content in files.items():
         path = out_dir / f"{name}.env"

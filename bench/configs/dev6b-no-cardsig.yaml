@@ -1,0 +1,15 @@
+# Phase 6b dev validation: stack profile no-cardsig, its adversaries only (2 runs each).
+name: dev6b-no-cardsig
+split: dev
+stack_profile: no-cardsig
+adversaries:
+- id: A1
+  baseline_runs: 1
+- id: A1b
+  baseline_runs: 1
+- id: A2
+  baseline_runs: 1
+- id: A3
+  baseline_runs: 1
+- id: A9
+  baseline_runs: 1
