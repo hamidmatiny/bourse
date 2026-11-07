@@ -276,7 +276,8 @@ def test_stack_up_writes_the_stack_profile_and_rejects_unknown_ones(
     assert profiles == ["no-exam"] and "stack profile no-exam" in res.output
     bad = CliRunner().invoke(cli.app, ["stack", "up", "--stack-profile", "no-broker"])
     # Rich wraps the error panel at the terminal width (narrow in CI) and adds ANSI codes.
-    plain = " ".join(re.sub(r"\x1b\[[0-9;]*m|[│╭╮╰╯─]", " ", bad.output).split())
+    no_ansi = re.sub(r"\x1b\[[0-9;]*m", "", bad.output)
+    plain = " ".join(re.sub(r"[│╭╮╰╯─]", " ", no_ansi).split())
     assert bad.exit_code != 0 and "--stack-profile must be one of" in plain
 
 
