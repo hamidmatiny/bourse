@@ -1,5 +1,6 @@
 """Bench preconditions and fail-loud stack up / launch (ADR-0051 fix round 3)."""
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,15 @@ def _ac_host(monkeypatch: pytest.MonkeyPatch, **over: Any) -> None:
         host, "sample", lambda phase, **k: HostSample(**(fields | {"phase": phase}))
     )
     monkeypatch.setattr(preflight, "fetch_profile", lambda url, timeout_s=10.0: "full")
+    # CI runs on Linux without caffeinate; the launch check looks it up with shutil.which.
+    import shutil
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name, *a, **k: "/usr/bin/caffeinate" if name == "caffeinate" else real_which(name),
+    )
 
 
 def test_bench_launch_refuses_and_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,7 +275,9 @@ def test_stack_up_writes_the_stack_profile_and_rejects_unknown_ones(
     assert res.exit_code == 0, res.output
     assert profiles == ["no-exam"] and "stack profile no-exam" in res.output
     bad = CliRunner().invoke(cli.app, ["stack", "up", "--stack-profile", "no-broker"])
-    assert bad.exit_code != 0 and "--stack-profile must be one of" in bad.output
+    # Rich wraps the error panel at the terminal width (narrow in CI) and adds ANSI codes.
+    plain = " ".join(re.sub(r"\x1b\[[0-9;]*m|[│╭╮╰╯─]", " ", bad.output).split())
+    assert bad.exit_code != 0 and "--stack-profile must be one of" in plain
 
 
 def test_agent_state_line_flags_honest_quarantine() -> None:
