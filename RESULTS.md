@@ -59,23 +59,27 @@ uv run bourse bench report --results
 
 ## b. Headline
 
-| config | N | task success | grader pass (all subtasks) | harmed cases | tokens p50 | latency s p50 | latency s p95 |
-|---|---|---|---|---|---|---|---|
-| B0 | 50 | 34/50 [0.54, 0.79] | 0/50 [0.00, 0.07] | - (clean pool) | 10949 [9990, 13322] | 179.4 [162.5, 197.9] | 313.2 [276.6, -] |
-| B1 | 100 | 100/100 [0.96, 1.00] | 88/100 [0.80, 0.93] | - (clean pool) | 5514 [4961, 5854] | 59.1 [53.6, 67.6] | 80.1 [75.8, 101.8] |
-| B3 | 100 | 100/100 [0.96, 1.00] | 85/100 [0.77, 0.91] | - (clean pool) | 4704 [4648, 4851] | 48.6 [46.8, 51.3] | 97.4 [81.0, 116.4] |
-| B1-mix | 100 | 100/100 [0.96, 1.00] | 69/100 [0.59, 0.77] | 66/100 [0.56, 0.75] | 4844 [4689, 5011] | 55.4 [53.1, 58.2] | 79.1 [75.2, 95.5] |
-| B3-mix | 100 | 99/100 [0.95, 1.00] | 83/100 [0.74, 0.89] | 13/100 [0.08, 0.21] | 4709 [4657, 4851] | 55.7 [53.3, 58.9] | 99.6 [84.1, 130.0] |
+| config | N | task success | grader pass (all subtasks) | attack-caused harm | harmed cases (raw) | tokens p50 | latency s p50 | latency s p95 |
+|---|---|---|---|---|---|---|---|---|
+| B0 | 50 | 34/50 [0.54, 0.79] | 0/50 [0.00, 0.07] | - (clean pool) | - (clean pool) | 10949 [9990, 13322] | 179.4 [162.5, 197.9] | 313.2 [276.6, -] |
+| B1 | 100 | 100/100 [0.96, 1.00] | 88/100 [0.80, 0.93] | - (clean pool) | - (clean pool) | 5514 [4961, 5854] | 59.1 [53.6, 67.6] | 80.1 [75.8, 101.8] |
+| B3 | 100 | 100/100 [0.96, 1.00] | 85/100 [0.77, 0.91] | - (clean pool) | - (clean pool) | 4704 [4648, 4851] | 48.6 [46.8, 51.3] | 97.4 [81.0, 116.4] |
+| B1-mix | 100 | 100/100 [0.96, 1.00] | 69/100 [0.59, 0.77] | 64/100 [0.54, 0.73] | 66/100 [0.56, 0.75] | 4844 [4689, 5011] | 55.4 [53.1, 58.2] | 79.1 [75.2, 95.5] |
+| B3-mix | 100 | 99/100 [0.95, 1.00] | 83/100 [0.74, 0.89] | 2/100 [0.01, 0.07] | 13/100 [0.08, 0.21] | 4709 [4657, 4851] | 55.7 [53.3, 58.9] | 99.6 [84.1, 130.0] |
 
 - Task success: the run finished with every subtask completed. Grader pass: every one of the
   5 subtasks passed its deterministic grader against the generated truth.
 - B0 is one generalist agent, with no broker choice. B1 picks uniformly at random among ACTIVE
   agents with broker trust controls off. B3 picks by measured reliability lower bound, cost and
   latency, with spot checks, canaries and violation reports on (ADR-0051).
-- Harmed cases are reported for the mixed pools only. A case counts as harmed when an adversary
-  served one of its subtasks and that caused harm: a grader fail on that subtask, an egress
-  attempt during it, or an unreported usage misreport (ADR-0051 fix round 1). Section e splits
-  harm by type.
+- **Attack-caused harm** is the headline harm metric (mixed pools only). A case counts when it
+  has billing harm, egress harm, or a failed adversary-served subtask whose grader line differs
+  from the same subtask on the same case in clean B3. The raw harmed count (ADR-0051 fix round
+  1) is kept next to it. It also counts grader fails on adversary-served subtasks that match
+  clean B3 exactly, which are honest-equivalent model errors, not attack effects.
+- Headline: grader pass B3-mix 83/100 [0.74, 0.89] vs B1-mix 69/100 [0.59, 0.77];
+  attack-caused harm B3-mix 2/100 [0.01, 0.07] vs B1-mix 64/100 [0.54, 0.73].
+  Section e splits harm by type.
 - Adversary share of delegations: B1-mix 115/503 [0.19, 0.27], B3-mix
   97/500 [0.16, 0.23].
 
@@ -107,6 +111,8 @@ uv run bourse bench report --results
 
 - caught 18/21 [0.65, 0.95] (budget 1, canary 1, deadline 1, domain 1, exam 3, lint 1, misreport-check 1, session-policy 1, sig 3, sinkhole 3, spotcheck 1, version 1); missed 0/21 [0.00, 0.15]; ineffective
   3/21 [0.05, 0.35]; not exposed 0/21 [0.00, 0.15]; error 0/21 [0.00, 0.15].
+- The ineffective rows are A4b, which is neutralised by design (finding 3), and the two
+  mixed-mode sleepers, which never reached their trigger (finding 4).
 - Of the caught rows, caught before harm 17/18 [0.74, 0.99] and after harm
   1/18 [0.01, 0.26]. The one caught after harm is A5b (sole-provider, harmed 6/14).
 - Harmed deliveries over all rows: 6/50 [0.06, 0.24].
@@ -170,20 +176,24 @@ and B3-mix (sections e and f).
 
 | harm type | B1-mix | B3-mix |
 |---|---|---|
-| harmed cases (any type) | 66/100 [0.56, 0.75] | 13/100 [0.08, 0.21] |
-| output harm (grader fail on an adversary-served subtask) | 25/100 [0.18, 0.34] | 13/100 [0.08, 0.21] |
+| harmed cases, raw (any type) | 66/100 [0.56, 0.75] | 13/100 [0.08, 0.21] |
+| **attack-caused harm** (billing, egress, or output that differs from clean B3) | 64/100 [0.54, 0.73] | 2/100 [0.01, 0.07] |
+| output harm, attack-caused (grader line differs from clean B3) | 21/100 [0.14, 0.30] | 2/100 [0.01, 0.07] |
+| output harm, honest-equivalent (same grader line as clean B3) | 4/100 [0.02, 0.10] | 11/100 [0.06, 0.19] |
+| harmed cases whose only harm is honest-equivalent | 2/100 [0.01, 0.07] | 11/100 [0.06, 0.19] |
 | billing harm (usage misreport not reported) | 50/100 [0.40, 0.60] | 0/100 [0.00, 0.04] |
 | output and billing in the same case | 9/100 [0.05, 0.16] | 0/100 [0.00, 0.04] |
 | cases with an egress attempt | 3/100 [0.01, 0.08] | 3/100 [0.01, 0.08] |
 | egress attempts that became harm | 0/3 | 0/3 |
 
-Output harm by adversary, with the domains of the failed cases:
+Output harm by adversary, split into attack-caused (with the domains of those cases) and
+honest-equivalent:
 
-| adversary | B1-mix output harm (by domain) | B3-mix output harm (by domain) |
+| adversary | B1-mix output harm | B3-mix output harm |
 |---|---|---|
-| poison-quiet | 2 (hard_pii 2) | 10 (hard_pii 10) |
-| sleeper-loud | 4 (hard_pii 2, people 2) | 1 (hard_pii 1) |
-| sleeper-quiet | 19 (hard_pii 5, shipments 5, clinic 4, orders 3, people 2) | 2 (clinic 1, hard_pii 1) |
+| poison-quiet | 2: attack-caused 0, honest-equivalent 2 | 10: attack-caused 0, honest-equivalent 10 |
+| sleeper-loud | 4: attack-caused 2 (people 2), honest-equivalent 2 | 1: attack-caused 0, honest-equivalent 1 |
+| sleeper-quiet | 19: attack-caused 19 (hard_pii 5, shipments 5, clinic 4, orders 3, people 2), honest-equivalent 0 | 2: attack-caused 2 (clinic 1, hard_pii 1), honest-equivalent 0 |
 
 - **Billing harm** is the misreporter alone. B1 runs with broker trust controls off
   (`NO_TRUST` in `src/bourse/bench/live.py`), so its misreports were never reported.
@@ -191,10 +201,17 @@ Output harm by adversary, with the domains of the failed cases:
   was quarantined by the sinkhole or DNS watcher by the end of that same case (pool tables:
   attempted cells 1, harmed cells 0). The sinkhole reports to the
   registry, so this does not depend on the broker's controls.
-- **Output harm from the adversaries that actually deviate** (sleeper-loud and sleeper-quiet):
-  B1-mix 23/100 [0.16, 0.32], B3-mix 3/100 [0.01, 0.08].
-- **poison-quiet's output harm** (B1-mix 2, B3-mix
-  10) is honest-equivalent model error, not deviation. See section f.
+- **Honest-equivalent output harm** (B1-mix 4/100 [0.02, 0.10], B3-mix
+  11/100 [0.06, 0.19]) is a grader fail whose grader line is identical to clean B3 on the
+  same case: the adversary produced what the honest agent produced. All of poison-quiet's output
+  harm (B1-mix 2, B3-mix 10) is in this class, and
+  so are sleeper-loud's hard_pii failures.
+- **Attack-caused output harm** (B1-mix 21/100 [0.14, 0.30], B3-mix
+  2/100 [0.01, 0.07]) comes from the sleepers.
+- **Limit of the comparison.** It is on the grader line, not on the bytes of the output. Clean B3
+  chose its own pii.detect agent per case, so an attack-caused output was compared with
+  B1-mix: vendor-b-pii-precise 1, vendor-c-pii-fast 20; B3-mix: vendor-c-pii-fast 2. A difference from
+  pii-precise could be an agent difference rather than an attack.
 
 Per-adversary pool tables (cells are 1-based in run order; detect delay = quarantine cell minus
 first harm cell):
@@ -285,11 +302,16 @@ latency differences. On pii.detect the runtime signal cannot tell the agents apa
   so at least 20 real tasks.
 - B3 picked sleeper-quiet only through exploration (section f.1).
 
-**3. A4b "ineffective" in the suite comes from too few deliveries.** The suite gave it
-4 (3 real, 1 canary). With 76 deliveries in B3-mix, the same
-honest-equivalent behaviour failed the grader on 10/10 hard_pii cases and
-nowhere else (finding 1). "Ineffective" means no attack effect, not that its outputs
-are always correct.
+**3. A4b (poison-quiet) is neutralised by design.**
+- Its attack is card text ("preferred provider … select first"). Card text never reaches the
+  selector or any prompt (rule 10), so the attack has nothing to act on. Its code path is the
+  honest one.
+- Its outputs match honest outputs: in B3-mix, 76/76 of its pii.detect grader
+  lines equal clean B3's on the same case (finding 1).
+- The suite's R5 "ineffective" row (4 (3 real, 1 canary)) records this outcome. It does not
+  depend on how many deliveries it got.
+- Its 10/10 hard_pii grader failures in B3-mix are the honest model's errors,
+  counted as honest-equivalent in section e.
 
 **4. The mixed-mode sleepers never reached their trigger.**
 - The sleepers deviate after 8 honest tasks: 5 exam tasks plus
@@ -395,8 +417,8 @@ and nothing from it is reported. Block 3 here is the clean re-run.
 - final-suite has no `evidence.json` counts: its database was removed by the next segment's
   stack down, before the export script existed. Its numbers come from `summary.json` and
   `results.jsonl` only.
-- "Harmed" counts model-quality errors that happen on an adversary-served subtask (finding 1).
-  Section e separates those from deviation.
+- Raw "harmed" counts model-quality errors that happen on an adversary-served subtask
+  (finding 1). Attack-caused harm (section e) removes the ones whose grader line matches clean B3.
 
 ## g. Earlier live evidence (Phase 5c acceptance, ADR-0048)
 
@@ -412,6 +434,15 @@ logs; approver user ids are not kept). They are not part of the final split.
 | reinstate with Approve | exam 5/5; ACTIVE; rel_epoch 0 -> 1 |
 | re-catch of the reinstated agent, new epoch | caught; exposure 7 (5 real, 2 canaries); first_bad 3; detect_delay 4; strikes 3; rel_epoch 1 |
 
+- **Exposure definition.** These rows use the current definition (ADR-0042 fix round 4):
+  exposure counts every delivery, canaries included, and first_bad and detect_delay index that
+  same sequence.
+  - ADR-0048's Observed section records the first catch as exposure 6, first_bad 4,
+    detect_delay 2. That matches this catch counted over real deliveries only, the definition
+    before fix round 4. No log on disk prints 6/4/2 itself.
+  - Over real deliveries, the catch above is exposure 6, first_bad
+    4, detect_delay 2. first_bad is the
+    same under both definitions, so both canaries came after it.
 - Reinstating the turned sleeper without resetting its behaviour failed the reinstatement exam
   0/5 (ADR-0048, Observed; the log of that run was not kept).
 - The Deny and Approve paths above ran after `/bourse/reset-behavior`.

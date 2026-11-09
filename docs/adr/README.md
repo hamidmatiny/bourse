@@ -55,4 +55,4 @@ Each record has Context, Decision, Consequences and Status. Process: [0001](0001
 | [0051](0051-bourse-bench-design.md) | BOURSE-Bench: baselines B0-B3, ablations, generator, frozen split, harness, sizing | 6a |
 | [0052](0052-pii-precise-llm-detection.md) | pii-precise 1.1.0: LLM-proposed contacts accepted by deterministic contact_check | 6a |
 | [0053](0053-stack-profiles-mixed-pools-segments.md) | Stack-profile ablations, mixed provider pools, one fresh stack per segment; amendment 1: one outcome classification, attempted vs harmed, exposure guarantee, per-spec wall cap | 6b |
-| [0054](0054-reproducible-results.md) | Tracked results/ dir, evidence counts, generated RESULTS.md with a CI drift check | 7 |
+| [0054](0054-reproducible-results.md) | Tracked results/ dir, evidence counts, generated RESULTS.md with a CI drift check; amendment 1: attack-caused harm | 7 |

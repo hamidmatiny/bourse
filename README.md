@@ -73,20 +73,28 @@ Final BOURSE-Bench run on the frozen test split (commit `c92aafe3cc54`, manifest
 one model `qwen3.5:27b-q4_K_M` on one machine). n/N with Wilson 95% CIs; full tables, ablations and
 limits in [RESULTS.md](RESULTS.md).
 
-| config | task success | grader pass | harmed cases | tokens p50 | latency s p50 |
-|---|---|---|---|---|---|
-| B1 clean (random) | 100/100 [0.96, 1.00] | 88/100 [0.80, 0.93] | - | 5514 [4961, 5854] | 59.1 [53.6, 67.6] |
-| B3 clean (measured) | 100/100 [0.96, 1.00] | 85/100 [0.77, 0.91] | - | 4704 [4648, 4851] | 48.6 [46.8, 51.3] |
-| B1-mix (adversaries, broker trust controls off) | 100/100 [0.96, 1.00] | 69/100 [0.59, 0.77] | 66/100 [0.56, 0.75] | 4844 [4689, 5011] | 55.4 [53.1, 58.2] |
-| B3-mix (adversaries, full trust layer) | 99/100 [0.95, 1.00] | 83/100 [0.74, 0.89] | 13/100 [0.08, 0.21] | 4709 [4657, 4851] | 55.7 [53.3, 58.9] |
+**Headline (mixed pools, adversaries present):** grader pass B3-mix 83/100 [0.74, 0.89] vs
+B1-mix 69/100 [0.59, 0.77]; attack-caused harm B3-mix 2/100 [0.01, 0.07] vs B1-mix
+64/100 [0.54, 0.73].
 
+| config | task success | grader pass | attack-caused harm | harmed cases (raw) | tokens p50 | latency s p50 |
+|---|---|---|---|---|---|---|
+| B1 clean (random) | 100/100 [0.96, 1.00] | 88/100 [0.80, 0.93] | - | - | 5514 [4961, 5854] | 59.1 [53.6, 67.6] |
+| B3 clean (measured) | 100/100 [0.96, 1.00] | 85/100 [0.77, 0.91] | - | - | 4704 [4648, 4851] | 48.6 [46.8, 51.3] |
+| B1-mix (adversaries, broker trust controls off) | 100/100 [0.96, 1.00] | 69/100 [0.59, 0.77] | 64/100 [0.54, 0.73] | 66/100 [0.56, 0.75] | 4844 [4689, 5011] | 55.4 [53.1, 58.2] |
+| B3-mix (adversaries, full trust layer) | 99/100 [0.95, 1.00] | 83/100 [0.74, 0.89] | 2/100 [0.01, 0.07] | 13/100 [0.08, 0.21] | 4709 [4657, 4851] | 55.7 [53.3, 58.9] |
+
+- Attack-caused harm: billing or egress harm, or an adversary-served grader fail whose grader
+  line differs from clean B3 on the same case. Raw harmed also counts honest-equivalent model
+  errors on adversary-served subtasks.
 - Adversary suite: caught 18/21 [0.65, 0.95], missed 0/21 [0.00, 0.15]; caught before harm
   17/18 [0.74, 0.99].
 - B3 on a clean pool is cheaper and faster than B1, not more accurate; every clean-B3 grader
   failure is on hard_pii (hard_pii 15).
-- The quiet poisoner (honest code, card-text attack) was never caught, and reliability-weighted
-  selection sent it 76 of 99 pii.detect subtasks in B3-mix
-  (RESULTS.md, finding 1).
+- The quiet poisoner (card-text attack, honest code) is neutralised by design: its outputs match
+  honest outputs (76/76), but reliability-weighted selection sent it
+  76 of 99 pii.detect subtasks in B3-mix and it
+  was never quarantined (RESULTS.md, finding 1).
 <!-- RESULTS:END -->
 
 ## Status

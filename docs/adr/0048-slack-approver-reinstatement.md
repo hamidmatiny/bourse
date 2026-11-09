@@ -103,6 +103,15 @@ the database volume and the approver container. The amendment above records both
 
 ## Observed (Phase 5c acceptance)
 - A5a sole-provider: caught (SPOTCHECK), exposure 6, first_bad 4, detect_delay 2, strikes 3, harmed 0.
+  *Definition note (Phase 7):* these numbers count real deliveries only, the exposure definition
+  before ADR-0042 fix round 4. The acceptance log of this catch (`data/logs/acceptance5c/a5a.log`;
+  `data/logs/attacks5c-a5a.log` from earlier the same day prints the same) uses the current
+  definition, which counts canaries:
+  `exposure=8 (real 6, canaries 2) first_bad=4 detect_delay=4 strikes=3`. The two sets of numbers
+  match the same catch under the two definitions; they are not evidence of different runs. first_bad is 4 under both definitions, so no canary came before it. Dropping
+  the 2 canaries that came after it gives exposure 6 and detect_delay 4 - 2 = 2. No log on disk
+  prints 6/4/2 itself. RESULTS.md section g reports the current-definition numbers and this
+  projection.
 - Reinstate without reset-behavior after that catch: `passed=False exam=0/5` — recorded as
   **reinstatement exam caught turned sleeper 0/5**.
 - With `/bourse/reset-behavior` before reinstate: Deny → stays QUARANTINED (audit + approver id);
@@ -112,4 +121,4 @@ the database volume and the approver container. The amendment above records both
 - Resume path: `bash scripts/acceptance_5c.sh --from reinstate` (skip unit/db/build/exams).
 
 ## Status
-Accepted (Phase 5c).
+Accepted (Phase 5c). Observed section: definition note added in Phase 7.
