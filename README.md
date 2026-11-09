@@ -13,41 +13,60 @@ adversarial benchmark reported as n/N.
 ## What it is
 
 BOURSE is an exchange where agents from several vendors are listed, selected and called over A2A
-v1.0. A vendor publishes an Agent Card signed with JWS over its RFC 8785 canonical form. The
-registry verifies the signature only against a JWKS pinned when the vendor was onboarded, checks
-skills against a closed taxonomy of 5 skills, and stores every card revision immutably. Agents call
-their own tools over MCP, and every LLM call goes through a metering proxy that records tokens and
-wall time per task. A LangGraph broker (Phase 3) will split a dataset-intake job into typed
-subtasks and choose an agent per subtask by expected utility: reliability lower bound minus cost
-minus latency. The project is built one phase at a time; phases 0–2b are done.
+v1.0. v1.0.0 completes the phase plan: Phases 0–7 are built, and the final benchmark run on the
+frozen test split is reported in [RESULTS.md](RESULTS.md).
+
+- **Cards and registry.** A vendor publishes an Agent Card signed with JWS over its RFC 8785
+  canonical form. The registry:
+  - verifies the signature only against a JWKS pinned when the vendor was onboarded;
+  - lints card text, checks domains and versions, and checks skills against a closed taxonomy
+    of 5 skills;
+  - stores every card revision immutably;
+  - lists an agent only after it passes a deterministic admission exam.
+- **Broker.** A LangGraph broker splits a dataset-intake job into typed subtasks. It picks an agent
+  per subtask by expected utility (reliability lower bound minus cost minus latency) and
+  delegates over A2A, checking the card for drift first.
+- **Tools and metering.** Agents call their own tools over MCP. Every agent LLM call goes through
+  a metering proxy that enforces a per-call deadline, a token cap and a per-task budget, and
+  records tokens and wall time per task.
+- **Trust at runtime.** The broker spot-checks outputs with its own deterministic code, sends
+  canaries and reports violations. A sinkhole and a DNS watcher capture egress. The registry
+  quarantines on strikes. Reinstatement needs a passed re-exam and an operator decision through
+  the Slack approver, and it starts a fresh reliability epoch (ADR-0048).
+- **BOURSE-Bench** measures all of this against baselines, adversaries and one-control-off
+  ablations, with every metric as n/N.
 
 ## Why
 
 Agent registries list whatever a card claims. A card signature proves which vendor published the
-card; it does not prove that the agent does what the card says, or that it stays honest after
+card. It does not prove that the agent does what the card says, or that it stays honest after
 listing. BOURSE adds four things on top of signing:
 
-1. An admission exam: an agent is graded on fixed inputs by deterministic graders before listing.
-   The graders exist (Phase 2b, ADR-0023); the exam that gates listing is not built yet.
-2. Measured cost and reliability: tokens and wall time come from the metering proxy (built,
-   Phase 2a), not from the card; reliability from graded task outcomes comes in Phase 4.
-3. Deterministic quarantine: trust state changes are made by code, never by an LLM, and card free
-   text is never placed in an LLM prompt (ADR-0008). The trust state machine exists (Phase 1);
-   runtime quarantine comes in Phase 5.
-4. A benchmark with a frozen test split and a hash manifest, with every metric reported as n/N
-   (ADR-0011; Phases 6–7).
+1. **An admission exam.** Before listing, the registry grades an agent on fixed inputs with
+   deterministic graders. An agent that cannot pass stays unlisted (ADR-0037, ADR-0049).
+2. **Measured cost and reliability.** Tokens and wall time come from the metering proxy, not from
+   the card. Reliability is the Wilson lower bound of spot-check successes in an append-only
+   ledger (ADR-0030).
+3. **Deterministic quarantine.** Spot checks, canaries, egress capture and usage cross-checks
+   produce violations, and code, never an LLM, moves an agent to QUARANTINED or REVOKED. Card free
+   text never enters an LLM prompt (ADR-0008).
+4. **A benchmark that reports its limits.** A frozen test split with a hash manifest, `--final`
+   runs only from a clean worktree, every metric as n/N with a Wilson CI. RESULTS.md is generated
+   from tracked results (ADR-0011, ADR-0051, ADR-0054). It reports what the trust layer misses as
+   well as what it catches.
 
 ## Architecture
 
-Solid lines exist today. Dashed lines are planned, with the phase that adds them.
+Every component below is built. The final benchmark used local Ollama only. The OmniRoute
+fallback exists in the meter but was not used in the final runs.
 
 ```mermaid
 flowchart LR
-    V[Vendors A, B, C<br/>signing keys] -->|signed Agent Card| R[Registry<br/>pinned JWKS, revisions,<br/>trust state]
+    V[Vendors A, B, C<br/>signing keys] -->|signed Agent Card| R[Registry<br/>pinned JWKS, lint, revisions,<br/>admission exam, trust state]
     R --- DB[(Postgres)]
-    B[Broker<br/>LangGraph planner + selector] -.->|Phase 3: read listings| R
-    B -.->|Phase 3: A2A tasks| AG
-    subgraph AG[Agents, one process each]
+    B[Broker<br/>LangGraph planner + selector] -->|read listings| R
+    B -->|A2A tasks + canaries| AG
+    subgraph AG[Agents, one container each]
         P[profiler<br/>LangGraph]
         PP[pii_precise<br/>CrewAI]
         PF[pii_fast<br/>a2a-sdk]
@@ -55,15 +74,24 @@ flowchart LR
         RP[reporter<br/>LangGraph]
     end
     AG -->|MCP, allowlisted tools| M[MCP servers<br/>table, pii, units]
-    AG -->|OpenAI API + task id| MT[Metering proxy]
+    AG -->|OpenAI API + task id| MT[Metering proxy<br/>deadline, token cap,<br/>per-task budget]
     MT -->|native API| O[Ollama]
-    MT -.->|fallback| OR[OmniRoute]
+    MT -->|fallback, unused in final runs| OR[OmniRoute]
     MT --> DB
     B -->|ledger rows, spot checks| L[Ledger + reliability]
     L --> DB
+    B -->|violations| R
     M -->|tool_usage| DB
+    AG -->|all DNS / egress| S[Sinkhole + egress DNS<br/>capture]
+    S -->|EGRESS_ATTEMPT, DNS_EGRESS| R
+    OP[Operator CLI<br/>trust reinstate] -->|reinstatement exam| R
+    OP -->|REINSTATE_AGENT| AP[Slack approver]
+    AP -->|approve / deny| OP
+    OP -->|decision| R
+    B -->|abort notices| AP
     AG -->|traceparent| OT[OTel collector -> Jaeger]
-    AG -.->|planned| E[Egress guard]
+    BB[BOURSE-Bench<br/>harness, baselines,<br/>adversaries, ablations] -->|runs| B
+    BB -->|results/ -> RESULTS.md| RES[(tracked results)]
 ```
 
 ## Results
