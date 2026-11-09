@@ -139,10 +139,11 @@ attack-caused output harm 21/100 [0.14, 0.30]); see harm by type in
 | 3 | Broker: planner, selector, card-drift-checked A2A delegation, resumable runs | `e19990a` | 393 unit, 10 db, 12 live passed; e2e runs succeeded 3/3, planner_used llm 3/3, fallbacks 0, subtasks graded passed 15/15; 9,293 tokens in / 1,726 out |
 | 4 | Measured ledger, spot-check reliability, measured selection with exploration, OTel, resident memory guard | Phase 4 commit | 446 unit, 19 db, 12 live passed; e2e --repeat 3: runs succeeded 9/9, exploration picks 2, spot-check failures 0/45, subtasks graded passed 45/45; 33,148 tokens in / 5,854 out; shadow_usd 0.009430; resident peak 25,628,315,882 |
 | 5a–5b | Trust runtime, adversaries A4–A8 | `5c48b5b` | see Phase 5b acceptance |
-| 5c | SlackApprover + reinstatement | – | A5a caught (SPOTCHECK, exposure 6, first_bad 4, delay 2, strikes 3, harmed 0); reinstate without reset-behavior = exam 0/5 (“turned sleeper”); Deny/Approve after `/bourse/reset-behavior` + `--reuse-agent` re-catch — see `scripts/acceptance_5c.sh` + ADR-0048 |
+| 5c | SlackApprover + reinstatement | `9a6245e` | A5a caught (SPOTCHECK): exposure 8 (6 real + 2 canaries), first_bad 4, detect_delay 4, strikes 3, harmed 0, under the current exposure definition (ADR-0042 fix round 4). ADR-0048's 6/4/2 is the same catch counted over real deliveries only; see its definition note. Reinstate without reset-behavior = exam 0/5 (“turned sleeper”); Deny/Approve after `/bourse/reset-behavior` + `--reuse-agent` re-catch: see `scripts/acceptance_5c.sh` + ADR-0048 |
 | 6a | Bench harness, baselines B0–B3, frozen test manifest, host conditions, pii-precise 1.1.0 | `03e03dd` | 761 unit, 28 db passed; dev pilot and ADR-0052 numbers in ADR-0051/0052 |
-| 6b | Hard per-task meter cap, stack-profile ablations, mixed pools, segment runner, final configs, one outcome classification, sole-provider exposure, per-spec wall cap | – | see ADR-0041 amendment, ADR-0053 (+ amendment 1), ADR-0049 amendment, ADR-0051 fix rounds 4-5 |
-| 7 | `--final` run, RESULTS.md | – | planned |
+| 6b | Hard per-task meter cap, stack-profile ablations, mixed pools, segment runner, final configs, one outcome classification, sole-provider exposure, per-spec wall cap, exam fault attribution | `68d06d0`, CI fixes `c92aafe` | done; 862 unit, 29 db passed; see ADR-0041 amendment, ADR-0053 (+ amendment 1), ADR-0049 amendments 1–2, ADR-0051 fix rounds 4-5. `c92aafe` is the commit every final segment ran on |
+| 7 | `--final` run (11 segments on `c92aafe`), tracked `results/`, generated RESULTS.md, README results block and release notes | `e8dae62`, `803a910`, `279bf7a` | done; 871 unit, 29 db passed; numbers in [RESULTS.md](RESULTS.md) (ADR-0054) |
+| v1.0.0 | Release tag | `803a910` | [GitHub release](https://github.com/hamidmatiny/bourse/releases/tag/v1.0.0) |
 
 Phase 2b smoke run: 3 fixture datasets (people, measurements, orders), each agent sent every skill
 it lists.
@@ -297,24 +298,23 @@ scripts/bench_segment.sh dev bench/configs/dev6b-no-exam.yaml --stack-profile no
 
 ## Limitations
 
-- Datasets are synthetic fixtures: 3 CSV files written for this project. The smoke run is 18
-  tasks, not a benchmark; the frozen benchmark split arrives in Phase 6.
+- Benchmark findings and limits (quiet poisoner, quiet sleeper, clean-pool ablations, hard_pii,
+  single model and machine) are in [RESULTS.md, section f](RESULTS.md#f-findings-and-limits).
+  Datasets are synthetic, from a generator written for this project.
 - Everything runs on one machine. Vendors are simulated: the `vendor-*.local` domains do not
   resolve, keys are generated locally, and pinned JWKS are posted by an admin rather than fetched.
 - Only local models through Ollama were exercised. Ollama with `OLLAMA_NUM_PARALLEL=2` is not
   bit-reproducible even with temperature 0 and a fixed seed: in one replay through the meter, the
   same normalizer request ended in a valid submit in 2 of 3 runs.
 - The adversaries are written by the same author as the defenses.
-- Phase 5b A5 sleepers: in mixed roster, selection often does not expose them (acceptance
-  sole-provider rerun: mixed exposure A5a 1, A5b 2 → status not-exposed). Under sole-provider,
-  quiet sleeper A5b harmed 6 tasks over 10 e2e deliveries before canary quarantine
-  (`first_bad=2`, `detect_delay=8`). Canaries strike but are not counted in `exposure`
-  (ADR-0042; Phase 6 may change that).
+- A5 sleepers: in the suite's mixed mode they never reach their trigger, and the quiet sleeper
+  harms before a canary catches it. Final numbers are in RESULTS.md, findings 2 and 4. Since
+  ADR-0042 fix round 4, `exposure` counts canaries as well as real deliveries.
 
 ## Documentation
 
 - [AGENTS.md](AGENTS.md): hard rules and phase plan.
-- [docs/adr/](docs/adr/README.md): architecture decision records (through ADR-0048).
+- [docs/adr/](docs/adr/README.md): architecture decision records (through ADR-0054).
 
 ## License
 
