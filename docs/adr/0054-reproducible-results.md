@@ -84,5 +84,14 @@ Two facts about the final data matter here:
     pii-precise could be an agent difference. RESULTS.md prints how many such comparisons there
     are.
 
+## Amendment 2 (v1.0.0 release): generated release notes
+- `bench report --results` also renders `docs/results/RELEASE_NOTES.template.md` into
+  `docs/results/RELEASE_NOTES.md`, and `--check` covers that file too.
+- The GitHub release for tag v1.0.0 uses that file as its body
+  (`gh release create --notes-file`), so the release numbers come from `results/` like
+  RESULTS.md.
+- The README headline gains one generated line: B1-mix's attack-caused harm is mostly the
+  misreporter's billing harm, with a link to harm by type.
+
 ## Status
-Accepted (Phase 7); amendment 1 in the Phase 7 review.
+Accepted (Phase 7); amendment 1 in the Phase 7 review; amendment 2 for the v1.0.0 release.

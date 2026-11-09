@@ -302,6 +302,8 @@ def test_committed_results_md_and_readme_match_results_dir() -> None:
         REPO / "docs/results/RESULTS.template.md",
         REPO / "docs/results/README.results.template.md",
         REPO / "README.md",
+        REPO / "docs/results/RELEASE_NOTES.template.md",
     )
     assert out.results_md == (REPO / "RESULTS.md").read_text()
     assert out.readme == (REPO / "README.md").read_text()
+    assert out.release_notes == (REPO / "docs/results/RELEASE_NOTES.md").read_text()

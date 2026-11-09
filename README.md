@@ -76,6 +76,9 @@ limits in [RESULTS.md](RESULTS.md).
 **Headline (mixed pools, adversaries present):** grader pass B3-mix 83/100 [0.74, 0.89] vs
 B1-mix 69/100 [0.59, 0.77]; attack-caused harm B3-mix 2/100 [0.01, 0.07] vs B1-mix
 64/100 [0.54, 0.73].
+B1-mix's attack-caused harm is mostly billing harm from the misreporter (50/100 [0.40, 0.60];
+attack-caused output harm 21/100 [0.14, 0.30]); see harm by type in
+[RESULTS.md, section e](RESULTS.md#e-harm-by-type-mixed-pools).
 
 | config | task success | grader pass | attack-caused harm | harmed cases (raw) | tokens p50 | latency s p50 |
 |---|---|---|---|---|---|---|

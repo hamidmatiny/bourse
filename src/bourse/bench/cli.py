@@ -380,6 +380,8 @@ RESULTS_DIR = Path("results")
 RESULTS_TEMPLATE = Path("docs/results/RESULTS.template.md")
 RESULTS_MD = Path("RESULTS.md")
 README_RESULTS = Path("docs/results/README.results.template.md")
+RELEASE_TEMPLATE = Path("docs/results/RELEASE_NOTES.template.md")
+RELEASE_NOTES = Path("docs/results/RELEASE_NOTES.md")
 README_MD = Path("README.md")
 
 
@@ -404,18 +406,24 @@ def bench_report(
         from bourse.bench.results_report import RenderError, render_all
 
         try:
-            out = render_all(RESULTS_DIR, RESULTS_TEMPLATE, README_RESULTS, README_MD)
+            out = render_all(
+                RESULTS_DIR, RESULTS_TEMPLATE, README_RESULTS, README_MD, RELEASE_TEMPLATE
+            )
         except (RenderError, OSError, ValueError) as exc:
             _fail(f"RESULTS.md not rendered: {exc}")
             return
-        targets = ((RESULTS_MD, out.results_md), (README_MD, out.readme))
+        targets = (
+            (RESULTS_MD, out.results_md),
+            (README_MD, out.readme),
+            (RELEASE_NOTES, out.release_notes or ""),
+        )
         if check:
             stale = [str(p) for p, text in targets if (p.read_text() if p.exists() else "") != text]
             if stale:
                 _fail(
                     f"out of date: {', '.join(stale)}; run `uv run bourse bench report --results`"
                 )
-            typer.echo("RESULTS.md and README.md results block are up to date")
+            typer.echo("RESULTS.md, README.md results block and release notes are up to date")
             return
         for path, text in targets:
             path.write_text(text)

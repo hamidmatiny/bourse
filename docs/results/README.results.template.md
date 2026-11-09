@@ -5,6 +5,9 @@ limits in [RESULTS.md](RESULTS.md).
 **Headline (mixed pools, adversaries present):** grader pass B3-mix {{b3_mix.grader_pass}} vs
 B1-mix {{b1_mix.grader_pass}}; attack-caused harm B3-mix {{b3_mix.attack_harm}} vs B1-mix
 {{b1_mix.attack_harm}}.
+B1-mix's attack-caused harm is mostly billing harm from the misreporter ({{b1_mix.billing}};
+attack-caused output harm {{b1_mix.output_attack}}); see harm by type in
+[RESULTS.md, section e](RESULTS.md#e-harm-by-type-mixed-pools).
 
 | config | task success | grader pass | attack-caused harm | harmed cases (raw) | tokens p50 | latency s p50 |
 |---|---|---|---|---|---|---|
