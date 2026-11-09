@@ -1,0 +1,129 @@
+{
+  "name": "final-b3",
+  "split": "test",
+  "provenance": {
+    "final": true,
+    "git_sha": "c92aafe3cc547bc08b14d8973ce38f303cb6e4fd",
+    "git_dirty": false,
+    "manifest_sha256": "f3f61465ed3807a88d839a7a7cc91a82e70094b114cd92721f56b5d4e5587d6e",
+    "model_digests": {
+      "qwen3.5:27b-q4_K_M": "64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59"
+    },
+    "ollama_env": {
+      "OLLAMA_NUM_PARALLEL": "2",
+      "settings.ollama_base_url": "http://127.0.0.1:11434",
+      "settings.ollama_num_parallel": "2"
+    },
+    "generator_version": "1",
+    "grader_version": "1",
+    "config_sha256": "9efc87a36b7a4faac89c8fc2eb8404096359a74f87d1ab16277f5d2fff6e6f23",
+    "at": "2026-11-08T01:22:30.132916Z",
+    "stack_profile": "full"
+  },
+  "configs": [
+    {
+      "config_id": "B3",
+      "task_success": {
+        "n": 100,
+        "N": 100,
+        "ci_low": 0.9630065017930143,
+        "ci_high": 1.0
+      },
+      "grader_pass": {
+        "n": 85,
+        "N": 100,
+        "ci_low": 0.7671644040916763,
+        "ci_high": 0.9069401471634337
+      },
+      "subtask_pass": {
+        "n": 485,
+        "N": 500,
+        "ci_low": 0.9510963331640543,
+        "ci_high": 0.9817367868020865
+      },
+      "contention": {
+        "n": 0,
+        "N": 100,
+        "ci_low": 3.469446951953614e-18,
+        "ci_high": 0.03699349820698568
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 4704.0,
+        "ci_low": 4648.0,
+        "ci_high": 4851.0,
+        "N": 100
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 5590.0,
+        "ci_low": 5208.0,
+        "ci_high": 6689.0,
+        "N": 100
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 69.853068626,
+        "ci_low": 68.357642917,
+        "ci_high": 71.421102292,
+        "N": 100
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 85.072144332,
+        "ci_low": 81.124097083,
+        "ci_high": 131.608762208,
+        "N": 100
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 48.637888,
+        "ci_low": 46.809388,
+        "ci_high": 51.347079,
+        "N": 100
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 97.367975,
+        "ci_low": 80.996982,
+        "ci_high": 116.419188,
+        "N": 100
+      },
+      "wall_s_total": 5463.510112999998,
+      "harmed": null,
+      "adversary_share": null,
+      "pool_adversaries": []
+    }
+  ],
+  "adversaries": null,
+  "adversary_rows": [],
+  "pii_agents": [],
+  "speedups": [],
+  "pii_identical": null,
+  "host": {
+    "samples": 103,
+    "on_battery": {
+      "n": 0,
+      "N": 103,
+      "ci_low": 0.0,
+      "ci_high": 0.03595475822864816
+    },
+    "low_power": {
+      "n": 0,
+      "N": 103,
+      "ci_low": 0.0,
+      "ci_high": 0.03595475822864816
+    },
+    "thermal_warning": {
+      "n": 0,
+      "N": 103,
+      "ci_low": 0.0,
+      "ci_high": 0.03595475822864816
+    },
+    "battery_min_pct": 100,
+    "cpu_speed_limit_min": null,
+    "load_1m_p50": 5.53955078125,
+    "load_1m_max": 8.19921875
+  }
+}

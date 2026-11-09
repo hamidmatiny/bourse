@@ -1,0 +1,256 @@
+{
+ "segment": "final-no-exam",
+ "available": true,
+ "ledger_rows": 93,
+ "violations": [
+  {
+   "agent_id": "smuggler-raw@vendor-x.local",
+   "kind": "SESSION_SMUGGLING",
+   "n": 3
+  }
+ ],
+ "ledger": [
+  {
+   "agent_id": "poison-loud@vendor-x.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "poison-loud@vendor-x.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "slow-loris-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "TIMEOUT",
+   "spot_check_passed": null,
+   "n": 1
+  },
+  {
+   "agent_id": "slow-loris-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "TIMEOUT",
+   "spot_check_passed": null,
+   "n": 3
+  },
+  {
+   "agent_id": "smuggler-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "CANCELED_QUARANTINE",
+   "spot_check_passed": null,
+   "n": 1
+  },
+  {
+   "agent_id": "smuggler-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "SESSION_POLICY",
+   "spot_check_passed": null,
+   "n": 3
+  },
+  {
+   "agent_id": "token-burner-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "FAILED",
+   "spot_check_passed": null,
+   "n": 1
+  },
+  {
+   "agent_id": "token-burner-raw@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "FAILED",
+   "spot_check_passed": null,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 2
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 7
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 16
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 2
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 7
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 16
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 10
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  }
+ ],
+ "selections": [
+  {
+   "skill": "pii.detect",
+   "chosen": "poison-loud@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-b-pii-precise@vendor-b.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 10
+  },
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-c-pii-fast@vendor-c.local",
+   "reason": "exploration",
+   "n": 3
+  },
+  {
+   "skill": "report.compose",
+   "chosen": "vendor-a-reporter@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 7
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "slow-loris-raw@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "smuggler-raw@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "token-burner-raw@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 7
+  },
+  {
+   "skill": "stats.compute",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 16
+  },
+  {
+   "skill": "units.normalize",
+   "chosen": "vendor-b-normalizer@vendor-b.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 16
+  }
+ ],
+ "last_pii_selection": [
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "s": 13,
+   "f": 0,
+   "reliability_lb": 0.7719046276458015,
+   "latency_ms": 28744.056159917935,
+   "cost_norm": 1.0,
+   "utility": 0.3719046276458015
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "s": 2,
+   "f": 0,
+   "reliability_lb": 0.3423802275066531,
+   "latency_ms": 5730.464765697252,
+   "cost_norm": 0.21234008627056578,
+   "utility": 0.26003986423557046
+  }
+ ]
+}

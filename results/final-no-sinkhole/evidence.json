@@ -1,0 +1,228 @@
+{
+ "segment": "final-no-sinkhole",
+ "available": true,
+ "ledger_rows": 80,
+ "violations": [],
+ "ledger": [
+  {
+   "agent_id": "exfil-dns@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "exfil-dns@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "exfil-http@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "exfil-http@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "exfil-https@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "exfil-https@vendor-x.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 4
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 12
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 4
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 12
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 4
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 12
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 3
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 9
+  }
+ ],
+ "selections": [
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-b-pii-precise@vendor-b.local",
+   "reason": "exploration",
+   "n": 3
+  },
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-c-pii-fast@vendor-c.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 9
+  },
+  {
+   "skill": "report.compose",
+   "chosen": "vendor-a-reporter@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 12
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "exfil-dns@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "exfil-http@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "exfil-https@vendor-x.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 3
+  },
+  {
+   "skill": "stats.compute",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 12
+  },
+  {
+   "skill": "units.normalize",
+   "chosen": "vendor-b-normalizer@vendor-b.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 12
+  }
+ ],
+ "last_pii_selection": [
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "s": 12,
+   "f": 0,
+   "reliability_lb": 0.7575059933447591,
+   "latency_ms": 13370.953083937602,
+   "cost_norm": 0.2543304876832265,
+   "utility": 0.6513757073463031
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "s": 2,
+   "f": 0,
+   "reliability_lb": 0.3423802275066531,
+   "latency_ms": 48389.213543513324,
+   "cost_norm": 1.0,
+   "utility": -0.05761977249334693
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+  "final": true,
+  "git_sha": "c92aafe3cc547bc08b14d8973ce38f303cb6e4fd",
+  "git_dirty": false,
+  "manifest_sha256": "f3f61465ed3807a88d839a7a7cc91a82e70094b114cd92721f56b5d4e5587d6e",
+  "model_digests": {
+    "qwen3.5:27b-q4_K_M": "64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59"
+  },
+  "ollama_env": {
+    "OLLAMA_NUM_PARALLEL": "2",
+    "settings.ollama_base_url": "http://127.0.0.1:11434",
+    "settings.ollama_num_parallel": "2"
+  },
+  "generator_version": "1",
+  "grader_version": "1",
+  "config_sha256": "0db564d36a2c97b2aa8273a2e590ce3fa2b00874c3fef37bc065024432e39832",
+  "at": "2026-11-08T18:55:02.512706Z",
+  "stack_profile": "no-sinkhole"
+}

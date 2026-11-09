@@ -1,0 +1,490 @@
+{
+  "name": "pilot-6a",
+  "split": "dev",
+  "provenance": {
+    "final": false,
+    "git_sha": "unknown",
+    "git_dirty": true,
+    "manifest_sha256": "7e0b43dd10f87cbf28cd00a77eb05e92b99f9a70f81cbecd553f4aa404418e6e",
+    "model_digests": {
+      "qwen3.5:27b-q4_K_M": "64ae5b1d651fb2709d5928ccb8dcfb4bb2cc9c2c8001ac34497e36a6cf905b59"
+    },
+    "ollama_env": {
+      "OLLAMA_NUM_PARALLEL": "2",
+      "settings.ollama_base_url": "http://127.0.0.1:11434",
+      "settings.ollama_num_parallel": "2"
+    },
+    "generator_version": "1",
+    "grader_version": "1",
+    "config_sha256": "6c17a4be157aa3c8e4d79c53be3c8315297a4c75297d7d044e67fbefc57dbc98",
+    "at": "2026-11-05T23:00:22.473746Z"
+  },
+  "configs": [
+    {
+      "config_id": "B0",
+      "task_success": {
+        "n": 3,
+        "N": 5,
+        "ci_low": 0.2307242812760128,
+        "ci_high": 0.882379225767352
+      },
+      "grader_pass": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "subtask_pass": {
+        "n": 4,
+        "N": 25,
+        "ci_low": 0.0640345145667644,
+        "ci_high": 0.3465362160717886
+      },
+      "contention": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 9479.0,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 13106.0,
+        "ci_low": 11433.0,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 219.15507633399997,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 275.21820845999997,
+        "ci_low": 237.44364534600004,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 219.32242897600008,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 275.37115537499994,
+        "ci_low": 237.52059602600002,
+        "ci_high": null,
+        "N": 5
+      },
+      "wall_s_total": 1092.4438722060002
+    },
+    {
+      "config_id": "B1",
+      "task_success": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "grader_pass": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "subtask_pass": {
+        "n": 25,
+        "N": 25,
+        "ci_low": 0.8668077490609515,
+        "ci_high": 0.9999999999999999
+      },
+      "contention": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 4680.0,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 10768.0,
+        "ci_low": 10353.0,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 100.542780917,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 187.274514832,
+        "ci_low": 169.718292126,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 74.119204,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 127.605654,
+        "ci_low": 113.973011,
+        "ci_high": null,
+        "N": 5
+      },
+      "wall_s_total": 448.94069099999996
+    },
+    {
+      "config_id": "B2",
+      "task_success": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "grader_pass": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "subtask_pass": {
+        "n": 25,
+        "N": 25,
+        "ci_low": 0.8668077490609515,
+        "ci_high": 0.9999999999999999
+      },
+      "contention": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 10014.0,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 10768.0,
+        "ci_low": 10353.0,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 164.264287583,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 175.17677649899997,
+        "ci_low": 173.02706337400002,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 111.041323,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 120.582709,
+        "ci_low": 119.627727,
+        "ci_high": null,
+        "N": 5
+      },
+      "wall_s_total": 531.578868
+    },
+    {
+      "config_id": "B3",
+      "task_success": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "grader_pass": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "subtask_pass": {
+        "n": 25,
+        "N": 25,
+        "ci_low": 0.8668077490609515,
+        "ci_high": 0.9999999999999999
+      },
+      "contention": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 4680.0,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 5047.0,
+        "ci_low": 4826.0,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 94.98073770900001,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 105.924912541,
+        "ci_low": 96.05333479200002,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 71.71852,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 128.374083,
+        "ci_low": 72.558198,
+        "ci_high": null,
+        "N": 5
+      },
+      "wall_s_total": 399.02798200000007
+    },
+    {
+      "config_id": "B3-serial",
+      "task_success": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "grader_pass": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      },
+      "subtask_pass": {
+        "n": 25,
+        "N": 25,
+        "ci_low": 0.8668077490609515,
+        "ci_high": 0.9999999999999999
+      },
+      "contention": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "contention_events": 0,
+      "tokens_p50": {
+        "q": 0.5,
+        "value": 4680.0,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "tokens_p95": {
+        "q": 0.95,
+        "value": 5047.0,
+        "ci_low": 4826.0,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p50": {
+        "q": 0.5,
+        "value": 73.943258583,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "compute_s_p95": {
+        "q": 0.95,
+        "value": 80.165847209,
+        "ci_low": 79.537743501,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p50": {
+        "q": 0.5,
+        "value": 71.973829,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "latency_s_p95": {
+        "q": 0.95,
+        "value": 132.465622,
+        "ci_low": 72.61734599999998,
+        "ci_high": null,
+        "N": 5
+      },
+      "wall_s_total": 406.637455
+    }
+  ],
+  "adversaries": {
+    "caught": {
+      "n": 1,
+      "N": 1,
+      "ci_low": 0.20654931437723745,
+      "ci_high": 1.0
+    },
+    "missed": {
+      "n": 0,
+      "N": 1,
+      "ci_low": 0.0,
+      "ci_high": 0.7934506856227626
+    },
+    "not_exposed": {
+      "n": 0,
+      "N": 1,
+      "ci_low": 0.0,
+      "ci_high": 0.7934506856227626
+    },
+    "error": {
+      "n": 0,
+      "N": 1,
+      "ci_low": 0.0,
+      "ci_high": 0.7934506856227626
+    },
+    "harmed": {
+      "n": 0,
+      "N": 8,
+      "ci_low": 0.0,
+      "ci_high": 0.32440756488388023
+    }
+  },
+  "adversary_rows": [
+    {
+      "record": "adversary",
+      "key": "adv/A5a/sole-provider#0",
+      "id": "A5a",
+      "mode": "sole-provider",
+      "honest_real": 3,
+      "status": "caught",
+      "actual": "SPOTCHECK_FAIL",
+      "expected": "CANARY_FAIL/SPOTCHECK_FAIL",
+      "exposure": 8,
+      "exposure_real": 6,
+      "canaries": 2,
+      "first_bad": 4,
+      "detect_delay": 4,
+      "strikes": 3,
+      "harmed": 0,
+      "harmed_total": 8,
+      "spec_wall_s": 1160.3795272799998,
+      "finished_at": "2026-11-06T00:10:58.110093Z"
+    }
+  ],
+  "pii_agents": [
+    {
+      "agent_id": "vendor-b-pii-precise@vendor-b.local",
+      "passed": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "f1_p50": {
+        "q": 0.5,
+        "value": 0.8304498269896194,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "completed": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      }
+    },
+    {
+      "agent_id": "vendor-c-pii-fast@vendor-c.local",
+      "passed": {
+        "n": 0,
+        "N": 5,
+        "ci_low": 0.0,
+        "ci_high": 0.43448246478317476
+      },
+      "f1_p50": {
+        "q": 0.5,
+        "value": 0.8304498269896194,
+        "ci_low": null,
+        "ci_high": null,
+        "N": 5
+      },
+      "completed": {
+        "n": 5,
+        "N": 5,
+        "ci_low": 0.5655175352168251,
+        "ci_high": 1.0
+      }
+    }
+  ],
+  "speedups": [
+    {
+      "serial_config": "B3-serial",
+      "parallel_config": "B3",
+      "paired_cases": 5,
+      "wall_serial_s": 406.637455,
+      "wall_parallel_s": 399.02798200000007,
+      "total_ratio": 1.019070023515293,
+      "paired_ratio_p50": 1.0035598754687074
+    }
+  ]
+}

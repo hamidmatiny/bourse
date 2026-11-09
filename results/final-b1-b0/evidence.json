@@ -1,0 +1,114 @@
+{
+ "segment": "final-b1-b0",
+ "available": true,
+ "ledger_rows": 500,
+ "violations": [],
+ "ledger": [
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 100
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 100
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 100
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 100
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 53
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": null,
+   "n": 47
+  }
+ ],
+ "selections": [
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-b-pii-precise@vendor-b.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 53
+  },
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-c-pii-fast@vendor-c.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 47
+  },
+  {
+   "skill": "report.compose",
+   "chosen": "vendor-a-reporter@vendor-a.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 100
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 100
+  },
+  {
+   "skill": "stats.compute",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 100
+  },
+  {
+   "skill": "units.normalize",
+   "chosen": "vendor-b-normalizer@vendor-b.local",
+   "reason": "uniform random among ACTIVE (seeded)",
+   "n": 100
+  }
+ ],
+ "last_pii_selection": [
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "s": 0,
+   "f": 0,
+   "reliability_lb": 0.0,
+   "latency_ms": 0.0,
+   "cost_norm": null,
+   "utility": 0.0
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "s": 0,
+   "f": 0,
+   "reliability_lb": 0.0,
+   "latency_ms": 0.0,
+   "cost_norm": null,
+   "utility": 0.0
+  }
+ ]
+}

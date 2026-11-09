@@ -21,6 +21,7 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy --strict src tests
       - run: uv run pytest
+      - run: uv run bourse bench report --results --check
 
   gitleaks:
     runs-on: ubuntu-latest

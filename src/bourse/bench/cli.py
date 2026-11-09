@@ -376,13 +376,79 @@ def _summary_for(run_dir: Path) -> Any:
     return summarize(cfg, load_records(run_dir), prov, host.load(run_dir))
 
 
+RESULTS_DIR = Path("results")
+RESULTS_TEMPLATE = Path("docs/results/RESULTS.template.md")
+RESULTS_MD = Path("RESULTS.md")
+README_RESULTS = Path("docs/results/README.results.template.md")
+README_MD = Path("README.md")
+
+
 @bench_app.command("report")
 def bench_report(
-    run_dir: Annotated[Path, typer.Argument(help="data/bench/<name>")],
+    run_dir: Annotated[
+        Path | None, typer.Argument(help="data/bench/<name> (omit with --results)")
+    ] = None,
+    results: Annotated[
+        bool,
+        typer.Option(
+            "--results", help="Write RESULTS.md from results/ and the template (ADR-0054)"
+        ),
+    ] = False,
+    check: Annotated[
+        bool, typer.Option("--check", help="With --results: fail if RESULTS.md is out of date")
+    ] = False,
 ) -> None:
-    """Aggregate results.jsonl (n/N with Wilson 95% CIs, quantiles, speedup)."""
+    """Aggregate results.jsonl (n/N with Wilson 95% CIs, quantiles, speedup), or with
+    --results regenerate RESULTS.md from the tracked results/ dir."""
+    if results:
+        from bourse.bench.results_report import RenderError, render_all
+
+        try:
+            out = render_all(RESULTS_DIR, RESULTS_TEMPLATE, README_RESULTS, README_MD)
+        except (RenderError, OSError, ValueError) as exc:
+            _fail(f"RESULTS.md not rendered: {exc}")
+            return
+        targets = ((RESULTS_MD, out.results_md), (README_MD, out.readme))
+        if check:
+            stale = [str(p) for p, text in targets if (p.read_text() if p.exists() else "") != text]
+            if stale:
+                _fail(
+                    f"out of date: {', '.join(stale)}; run `uv run bourse bench report --results`"
+                )
+            typer.echo("RESULTS.md and README.md results block are up to date")
+            return
+        for path, text in targets:
+            path.write_text(text)
+            typer.echo(f"written {path} ({len(text.splitlines())} lines) from {RESULTS_DIR}/")
+        return
+    if run_dir is None:
+        _fail("give data/bench/<name>, or --results")
+        return
     for line in format_summary(_summary_for(run_dir)):
         typer.echo(line)
+
+
+@bench_app.command("results-export")
+def bench_results_export(
+    bench_dir: Annotated[Path, typer.Option(help="Bench outputs")] = BENCH_DIR,
+    phase5c_logs: Annotated[Path, typer.Option(help="Phase 5c acceptance logs")] = Path(
+        "data/logs/acceptance5c"
+    ),
+    out: Annotated[Path, typer.Option(help="Tracked results dir")] = RESULTS_DIR,
+) -> None:
+    """Copy the final segments' summary.json / results.jsonl / provenance.json into results/
+    and reduce each evidence export to counts (ADR-0054). Refuses mixed commits or dirty runs."""
+    from bourse.bench.results_export import ExportRefused, export_results
+
+    try:
+        lines = export_results(
+            bench_dir, phase5c_logs, out, ollama_url=get_settings().ollama_base_url
+        )
+    except (ExportRefused, OSError, ValueError) as exc:
+        _fail(f"results export refused: {exc}")
+        return
+    for line in lines:
+        typer.echo(f"written {line}")
 
 
 @bench_app.command("sizing")

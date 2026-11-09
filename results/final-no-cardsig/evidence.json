@@ -1,0 +1,190 @@
+{
+ "segment": "final-no-cardsig",
+ "available": true,
+ "ledger_rows": 30,
+ "violations": [
+  {
+   "agent_id": "a1-forged@vendor-x.local",
+   "kind": "EXAM_FAILED",
+   "n": 1
+  },
+  {
+   "agent_id": "a1b-domain@vendor-x.local",
+   "kind": "DOMAIN_MISMATCH",
+   "n": 1
+  },
+  {
+   "agent_id": "a2-tampered@vendor-x.local",
+   "kind": "EXAM_FAILED",
+   "n": 1
+  },
+  {
+   "agent_id": "a3-untrusted-jku@vendor-x.local",
+   "kind": "EXAM_FAILED",
+   "n": 1
+  },
+  {
+   "agent_id": "a9-version@vendor-x.local",
+   "kind": "EXAM_FAILED",
+   "n": 1
+  },
+  {
+   "agent_id": "a9-version@vendor-x.local",
+   "kind": "VERSION_REUSE",
+   "n": 1
+  },
+  {
+   "agent_id": "a9-version@vendor-x.local",
+   "kind": "VERSION_ROLLBACK",
+   "n": 1
+  }
+ ],
+ "ledger": [
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "schema.profile",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-a-profiler@vendor-a.local",
+   "skill": "stats.compute",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-a-reporter@vendor-a.local",
+   "skill": "report.compose",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-b-normalizer@vendor-b.local",
+   "skill": "units.normalize",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 5
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "canary",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  },
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 4
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "skill": "pii.detect",
+   "kind": "task",
+   "state": "COMPLETED",
+   "spot_check_passed": true,
+   "n": 1
+  }
+ ],
+ "selections": [
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-b-pii-precise@vendor-b.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 4
+  },
+  {
+   "skill": "pii.detect",
+   "chosen": "vendor-c-pii-fast@vendor-c.local",
+   "reason": "exploration",
+   "n": 1
+  },
+  {
+   "skill": "report.compose",
+   "chosen": "vendor-a-reporter@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 5
+  },
+  {
+   "skill": "schema.profile",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 5
+  },
+  {
+   "skill": "stats.compute",
+   "chosen": "vendor-a-profiler@vendor-a.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 5
+  },
+  {
+   "skill": "units.normalize",
+   "chosen": "vendor-b-normalizer@vendor-b.local",
+   "reason": "max utility (measured; ties by seeded hash per decision)",
+   "n": 5
+  }
+ ],
+ "last_pii_selection": [
+  {
+   "agent_id": "vendor-b-pii-precise@vendor-b.local",
+   "s": 4,
+   "f": 0,
+   "reliability_lb": 0.5101091635454027,
+   "latency_ms": 38060.06479764526,
+   "cost_norm": 1.0,
+   "utility": 0.11010916354540268
+  },
+  {
+   "agent_id": "vendor-c-pii-fast@vendor-c.local",
+   "s": 1,
+   "f": 0,
+   "reliability_lb": 0.20654931437723742,
+   "latency_ms": 14761.028131993953,
+   "cost_norm": 0.27831895352073477,
+   "utility": 0.0733185084277186
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+{
+ "model": "Mac15,9",
+ "cpu": "Apple M3 Max",
+ "cpu_count": 16,
+ "memory_bytes": 51539607552,
+ "os": "macOS 26.6.2",
+ "ollama_version": "0.40.6",
+ "docker_version": "Docker version 29.9.2, build a82e528"
+}

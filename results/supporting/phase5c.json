@@ -1,0 +1,34 @@
+{
+ "catch": {
+  "adversary": "A5a",
+  "mode": "sole-provider",
+  "status": "caught",
+  "exposure": 8,
+  "exposure_real": 6,
+  "canaries": 2,
+  "first_bad": 4,
+  "detect_delay": 4,
+  "strikes": 3,
+  "rel_epoch": 0
+ },
+ "recatch": {
+  "adversary": "A5a",
+  "mode": "sole-provider",
+  "status": "caught",
+  "exposure": 7,
+  "exposure_real": 5,
+  "canaries": 2,
+  "first_bad": 3,
+  "detect_delay": 4,
+  "strikes": 3,
+  "rel_epoch": 1
+ },
+ "approve_exam": "5/5",
+ "approve_to_state": "ACTIVE",
+ "approve_epoch_from": 0,
+ "approve_epoch_to": 1,
+ "deny_exam": "5/5",
+ "deny_to_state": "QUARANTINED",
+ "slack_approve": "approved=True reason=operator approved",
+ "slack_timeout": "approved=False reason=timeout"
+}
